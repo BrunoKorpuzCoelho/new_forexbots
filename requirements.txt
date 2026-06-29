@@ -6,7 +6,7 @@ protobuf==4.25.3
 # Indicadores técnicos (EMA, RSI, Bollinger Bands, ATR)
 pandas==2.2.2
 numpy==1.26.4
-pandas-ta==0.3.14b0
+pandas-ta==0.4.71b0
 
 # Dashboard Web
 django==5.0.6
