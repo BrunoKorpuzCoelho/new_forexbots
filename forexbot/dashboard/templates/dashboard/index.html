@@ -1,0 +1,155 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Dashboard — ForexBot v2{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="cards">
+  <div class="card">
+    <div class="label">Total Trades</div>
+    <div class="value neutral">{{ total_trades }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Win Rate</div>
+    <div class="value {% if win_rate >= 50 %}positive{% else %}negative{% endif %}">{{ win_rate }}%</div>
+  </div>
+  <div class="card">
+    <div class="label">P&amp;L Total</div>
+    <div class="value {% if total_pnl >= 0 %}positive{% else %}negative{% endif %}">${{ total_pnl }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Trades Abertos</div>
+    <div class="value neutral">{{ open_count }}</div>
+  </div>
+</div>
+
+<h2>Por Estratégia</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Estratégia</th>
+      <th>Trades</th>
+      <th>Wins</th>
+      <th>Win Rate</th>
+      <th>P&amp;L</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in by_strategy %}
+    <tr>
+      <td><a href="{% url 'strategy_detail' s.strategy %}">{{ s.strategy }}</a></td>
+      <td>{{ s.total }}</td>
+      <td>{{ s.wins }}</td>
+      <td class="{% if s.win_rate >= 50 %}positive{% else %}negative{% endif %}">{{ s.win_rate }}%</td>
+      <td class="{% if s.pnl >= 0 %}positive{% else %}negative{% endif %}">${{ s.pnl }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5">Sem trades</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Top 10 Pares</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Par</th>
+      <th>Trades</th>
+      <th>Wins</th>
+      <th>Win Rate</th>
+      <th>P&amp;L</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in by_symbol %}
+    <tr>
+      <td>{{ s.symbol }}</td>
+      <td>{{ s.count }}</td>
+      <td>{{ s.wins }}</td>
+      <td class="{% if s.win_rate >= 50 %}positive{% else %}negative{% endif %}">{{ s.win_rate }}%</td>
+      <td class="{% if s.pnl >= 0 %}positive{% else %}negative{% endif %}">${{ s.pnl }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5">Sem trades</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Últimos 20 Trades</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Data</th>
+      <th>Estr.</th>
+      <th>Par</th>
+      <th>Dir</th>
+      <th>Entrada</th>
+      <th>SL</th>
+      <th>TP</th>
+      <th>P&amp;L</th>
+      <th>Motivo</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in recent_trades %}
+    <tr>
+      <td>{{ t.opened_at|date:"Y-m-d H:i" }}</td>
+      <td>{{ t.strategy }}</td>
+      <td>{{ t.symbol }}</td>
+      <td>
+        <span class="badge {% if t.direction == 'LONG' %}badge-long{% else %}badge-short{% endif %}">
+          {{ t.direction }}
+        </span>
+      </td>
+      <td>{{ t.entry|floatformat:5 }}</td>
+      <td>{{ t.sl|floatformat:5 }}</td>
+      <td>{{ t.tp|floatformat:5 }}</td>
+      <td class="{% if t.pnl is None %}neutral{% elif t.pnl >= 0 %}positive{% else %}negative{% endif %}">
+        {% if t.pnl is not None %}${{ t.pnl|floatformat:2 }}{% else %}—{% endif %}
+      </td>
+      <td class="reason" title="{{ t.reason }}">{{ t.reason }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="9">Sem trades</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Posições Abertas</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Ticket</th>
+      <th>Estr.</th>
+      <th>Par</th>
+      <th>Dir</th>
+      <th>Entrada</th>
+      <th>SL</th>
+      <th>TP</th>
+      <th>Lot</th>
+      <th>Aberto em</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in open_trades %}
+    <tr>
+      <td>{{ t.ticket }}</td>
+      <td>{{ t.strategy }}</td>
+      <td>{{ t.symbol }}</td>
+      <td>
+        <span class="badge {% if t.direction == 'LONG' %}badge-long{% else %}badge-short{% endif %}">
+          {{ t.direction }}
+        </span>
+      </td>
+      <td>{{ t.entry|floatformat:5 }}</td>
+      <td>{{ t.sl|floatformat:5 }}</td>
+      <td>{{ t.tp|floatformat:5 }}</td>
+      <td>{{ t.lot }}</td>
+      <td>{{ t.opened_at|date:"Y-m-d H:i" }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="9">Nenhuma posição aberta</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

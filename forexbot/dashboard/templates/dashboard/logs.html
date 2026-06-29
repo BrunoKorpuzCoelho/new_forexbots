@@ -1,0 +1,81 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Decision Logs — ForexBot v2{% endblock %}
+
+{% block content %}
+<h1>Decision Logs</h1>
+
+<form class="filters" method="get">
+  <label>
+    Estratégia
+    <select name="strategy">
+      <option value="">Todas</option>
+      <option value="A" {% if filters.strategy == "A" %}selected{% endif %}>A</option>
+      <option value="B" {% if filters.strategy == "B" %}selected{% endif %}>B</option>
+      <option value="C" {% if filters.strategy == "C" %}selected{% endif %}>C</option>
+    </select>
+  </label>
+  <label>
+    Par
+    <input type="text" name="symbol" value="{{ filters.symbol }}" placeholder="EURUSD">
+  </label>
+  <label>
+    Resultado
+    <select name="result">
+      <option value="">Todos</option>
+      {% for r in result_choices %}
+      <option value="{{ r }}" {% if filters.result == r %}selected{% endif %}>{{ r }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Data
+    <input type="date" name="date" value="{{ filters.date }}">
+  </label>
+  <button type="submit">Filtrar</button>
+</form>
+
+<p style="color:#888;margin-bottom:1rem;">{{ page.paginator.count }} registos encontrados</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Timestamp</th>
+      <th>Estr.</th>
+      <th>Par</th>
+      <th>Resultado</th>
+      <th>Motivo</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for log in page %}
+    <tr>
+      <td>{{ log.ts|date:"Y-m-d H:i:s" }}</td>
+      <td>{{ log.strategy }}</td>
+      <td>{{ log.symbol }}</td>
+      <td>
+        {% if log.result == "SIGNAL" %}
+          <span class="positive">{{ log.result }}</span>
+        {% elif log.result == "NO_SIGNAL" %}
+          <span class="neutral">{{ log.result }}</span>
+        {% else %}
+          {{ log.result }}
+        {% endif %}
+      </td>
+      <td class="reason" title="{{ log.reason }}">{{ log.reason }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5">Sem registos</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="pagination">
+  {% if page.has_previous %}
+    <a href="?page={{ page.previous_page_number }}&strategy={{ filters.strategy }}&symbol={{ filters.symbol }}&result={{ filters.result }}&date={{ filters.date }}">← Anterior</a>
+  {% endif %}
+  <span>Página {{ page.number }} de {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}
+    <a href="?page={{ page.next_page_number }}&strategy={{ filters.strategy }}&symbol={{ filters.symbol }}&result={{ filters.result }}&date={{ filters.date }}">Próxima →</a>
+  {% endif %}
+</div>
+{% endblock %}

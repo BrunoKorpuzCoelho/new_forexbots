@@ -1,0 +1,33 @@
+# cTrader Open API
+ctrader-open-api==2.0.0
+twisted==23.10.0
+protobuf==4.25.3
+
+# Indicadores técnicos (EMA, RSI, Bollinger Bands, ATR)
+pandas==2.2.2
+numpy==1.26.4
+pandas-ta==0.3.14b0
+
+# Dashboard Web
+django==5.0.6
+whitenoise==6.7.0
+
+# Telegram
+python-telegram-bot==21.3
+
+# Variáveis de ambiente
+python-dotenv==1.0.1
+
+# HTTP requests (para refresh de token OAuth)
+requests==2.32.3
+
+# Logging estruturado
+structlog==24.2.0
+
+# Testes
+pytest==8.2.2
+pytest-asyncio==0.23.7
+
+# Utilitários
+pytz==2024.1
+schedule==1.2.2

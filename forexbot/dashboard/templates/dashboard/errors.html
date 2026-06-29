@@ -1,0 +1,73 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Erros e Avisos — ForexBot v2{% endblock %}
+
+{% block content %}
+<h1>Erros e Avisos</h1>
+
+<form class="filters" method="get">
+  <label>
+    Nível
+    <select name="level">
+      <option value="">Todos</option>
+      {% for lvl in level_choices %}
+      <option value="{{ lvl }}" {% if filters.level == lvl %}selected{% endif %}>{{ lvl }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Contexto
+    <input type="text" name="context" value="{{ filters.context }}" placeholder="ex: Estratégia A">
+  </label>
+  <label>
+    Data
+    <input type="date" name="date" value="{{ filters.date }}">
+  </label>
+  <button type="submit">Filtrar</button>
+</form>
+
+<p style="color:#888;margin-bottom:1rem;">{{ total_count }} erros encontrados</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Data/Hora</th>
+      <th>Nível</th>
+      <th>Contexto</th>
+      <th>Mensagem</th>
+      <th>Traceback</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for err in page %}
+    <tr class="{% if err.level == 'ERROR' %}row-error{% else %}row-warning{% endif %}">
+      <td>{{ err.ts|date:"Y-m-d H:i:s" }}</td>
+      <td>{{ err.level }}</td>
+      <td>{{ err.context }}</td>
+      <td class="reason" title="{{ err.message }}">{{ err.message }}</td>
+      <td>
+        {% if err.traceback %}
+        <details>
+          <summary>ver traceback</summary>
+          <pre>{{ err.traceback }}</pre>
+        </details>
+        {% else %}
+        —
+        {% endif %}
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5">Sem erros registados</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="pagination">
+  {% if page.has_previous %}
+    <a href="?page={{ page.previous_page_number }}&level={{ filters.level }}&context={{ filters.context }}&date={{ filters.date }}">← Anterior</a>
+  {% endif %}
+  <span>Página {{ page.number }} de {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}
+    <a href="?page={{ page.next_page_number }}&level={{ filters.level }}&context={{ filters.context }}&date={{ filters.date }}">Próxima →</a>
+  {% endif %}
+</div>
+{% endblock %}

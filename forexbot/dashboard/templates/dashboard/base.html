@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}ForexBot v2{% endblock %}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+    a { color: #4da6ff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    nav {
+      background: #16213e;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      border-bottom: 1px solid #0f3460;
+    }
+    nav .brand { font-weight: bold; font-size: 1.1rem; color: #fff; }
+    nav .links { display: flex; gap: 1rem; flex-wrap: wrap; }
+    main { padding: 2rem; max-width: 1200px; margin: 0 auto; }
+    h1 { margin-bottom: 1.5rem; color: #fff; font-size: 1.5rem; }
+    h2 { margin: 1.5rem 0 0.75rem; color: #ccc; font-size: 1.1rem; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .card {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      padding: 1.25rem;
+    }
+    .card .label { font-size: 0.85rem; color: #888; margin-bottom: 0.25rem; }
+    .card .value { font-size: 1.5rem; font-weight: bold; }
+    .positive { color: #4caf50; }
+    .negative { color: #f44336; }
+    .neutral { color: #4da6ff; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 2rem;
+      font-size: 0.9rem;
+    }
+    th, td {
+      padding: 0.6rem 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid #0f3460;
+    }
+    th { background: #16213e; color: #aaa; font-weight: 600; }
+    tr:hover { background: #16213e; }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .badge-long { background: #1b4332; color: #4caf50; }
+    .badge-short { background: #4a1010; color: #f44336; }
+    .badge-open { background: #0f3460; color: #4da6ff; }
+    form.filters {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.5rem;
+      align-items: flex-end;
+    }
+    form.filters label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: #aaa; }
+    form.filters input, form.filters select {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      color: #e0e0e0;
+      padding: 0.4rem 0.6rem;
+      border-radius: 4px;
+    }
+    form.filters button {
+      background: #0f3460;
+      color: #fff;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    form.filters button:hover { background: #4da6ff; }
+    .pagination { display: flex; gap: 1rem; margin-top: 1rem; }
+    .reason { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge-error {
+      background: #f44336;
+      color: #fff;
+      border-radius: 10px;
+      padding: 0.1rem 0.4rem;
+      font-size: 0.7rem;
+      margin-left: 0.25rem;
+    }
+    .row-error { background: #3d0000; }
+    .row-warning { background: #3d3000; }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.75rem;
+      color: #ccc;
+      margin-top: 0.5rem;
+      max-width: 400px;
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">ForexBot v2 | Dashboard</span>
+    <div class="links">
+      <a href="{% url 'index' %}">Index</a>
+      <a href="{% url 'logs' %}">Logs</a>
+      <a href="{% url 'errors' %}">🚨 Erros{% if recent_errors_count > 0 %}<span class="badge-error">{{ recent_errors_count }}</span>{% endif %}</a>
+      <a href="{% url 'strategy_detail' 'A' %}">Estratégia A</a>
+      <a href="{% url 'strategy_detail' 'B' %}">Estratégia B</a>
+      <a href="{% url 'strategy_detail' 'C' %}">Estratégia C</a>
+    </div>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

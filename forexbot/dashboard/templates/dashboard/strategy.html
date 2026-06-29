@@ -1,0 +1,89 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Estratégia {{ strategy }} — ForexBot v2{% endblock %}
+
+{% block content %}
+<h1>Estratégia {{ strategy }}</h1>
+
+<div class="cards">
+  <div class="card">
+    <div class="label">Total Trades</div>
+    <div class="value neutral">{{ stats.total }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Win Rate</div>
+    <div class="value {% if stats.win_rate >= 50 %}positive{% else %}negative{% endif %}">{{ stats.win_rate }}%</div>
+  </div>
+  <div class="card">
+    <div class="label">P&amp;L Total</div>
+    <div class="value {% if stats.pnl >= 0 %}positive{% else %}negative{% endif %}">${{ stats.pnl }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Avg P&amp;L / Trade</div>
+    <div class="value {% if avg_pnl >= 0 %}positive{% else %}negative{% endif %}">${{ avg_pnl }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Melhor Trade</div>
+    <div class="value positive">
+      {% if best_trade %}${{ best_trade.pnl|floatformat:2 }}{% else %}—{% endif %}
+    </div>
+  </div>
+  <div class="card">
+    <div class="label">Pior Trade</div>
+    <div class="value negative">
+      {% if worst_trade %}${{ worst_trade.pnl|floatformat:2 }}{% else %}—{% endif %}
+    </div>
+  </div>
+</div>
+
+<h2>Todos os Trades</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Data</th>
+      <th>Par</th>
+      <th>Dir</th>
+      <th>Entrada</th>
+      <th>SL</th>
+      <th>TP</th>
+      <th>Lot</th>
+      <th>P&amp;L</th>
+      <th>Pips</th>
+      <th>Estado</th>
+      <th>Motivo</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in trades %}
+    <tr>
+      <td>{{ t.opened_at|date:"Y-m-d H:i" }}</td>
+      <td>{{ t.symbol }}</td>
+      <td>
+        <span class="badge {% if t.direction == 'LONG' %}badge-long{% else %}badge-short{% endif %}">
+          {{ t.direction }}
+        </span>
+      </td>
+      <td>{{ t.entry|floatformat:5 }}</td>
+      <td>{{ t.sl|floatformat:5 }}</td>
+      <td>{{ t.tp|floatformat:5 }}</td>
+      <td>{{ t.lot }}</td>
+      <td class="{% if t.pnl is None %}neutral{% elif t.pnl >= 0 %}positive{% else %}negative{% endif %}">
+        {% if t.pnl is not None %}${{ t.pnl|floatformat:2 }}{% else %}—{% endif %}
+      </td>
+      <td>{% if t.pips is not None %}{{ t.pips|floatformat:1 }}{% else %}—{% endif %}</td>
+      <td>
+        {% if t.is_open %}
+          <span class="badge badge-open">ABERTO</span>
+        {% elif t.is_winner %}
+          <span class="positive">WIN</span>
+        {% else %}
+          <span class="negative">LOSS</span>
+        {% endif %}
+      </td>
+      <td class="reason" title="{{ t.reason }}">{{ t.reason }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="11">Sem trades para esta estratégia</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
