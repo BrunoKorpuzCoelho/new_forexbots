@@ -1,7 +1,7 @@
 # cTrader Open API
 ctrader-open-api==0.9.2
 twisted==24.3.0
-protobuf==4.25.3
+protobuf==3.20.1
 
 # Indicadores técnicos (EMA, RSI, Bollinger Bands, ATR)
 pandas==2.2.2
