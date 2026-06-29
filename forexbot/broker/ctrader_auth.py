@@ -4,7 +4,6 @@ Correr manualmente na VPS: python -m forexbot.broker.ctrader_auth
 """
 import logging
 import os
-import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -17,7 +16,9 @@ load_dotenv()
 
 log = logging.getLogger(__name__)
 
-REDIRECT_URI = "http://localhost:8080/callback"
+REDIRECT_URI = os.getenv(
+    "CTRADER_REDIRECT_URI", "http://localhost:8080/callback"
+)
 AUTH_URL = "https://connect.spotware.com/apps/auth"
 TOKEN_URL = "https://connect.spotware.com/apps/token"
 ENV_FILE = ".env"
@@ -109,13 +110,10 @@ def refresh_token_if_needed() -> str:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    auth_url = get_auth_url()
-    log.info("A abrir browser para autenticação cTrader...")
-    log.info("URL (se o browser não abrir): %s", auth_url)
-    webbrowser.open(auth_url)
-
+    log.info("Abre este URL no browser:")
+    log.info("%s", get_auth_url())
     log.info("A aguardar callback em %s ...", REDIRECT_URI)
-    server = HTTPServer(("localhost", 8080), CallbackHandler)
+    server = HTTPServer(("0.0.0.0", 8080), CallbackHandler)
     server.handle_request()
 
     if not _auth_code:

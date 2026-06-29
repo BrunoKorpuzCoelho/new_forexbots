@@ -11,6 +11,9 @@ CTRADER_ACCESS_TOKEN  = os.getenv("CTRADER_ACCESS_TOKEN", "")
 CTRADER_REFRESH_TOKEN = os.getenv("CTRADER_REFRESH_TOKEN", "")
 CTRADER_HOST          = os.getenv("CTRADER_HOST", "demo.ctraderapi.com")
 CTRADER_PORT          = int(os.getenv("CTRADER_PORT", "5035"))
+CTRADER_REDIRECT_URI  = os.getenv(
+    "CTRADER_REDIRECT_URI", "http://localhost:8080/callback"
+)
 
 # ── Telegram ─────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
