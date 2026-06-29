@@ -12,8 +12,8 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAAccountAuthRes,
     ProtoOAApplicationAuthReq,
     ProtoOAApplicationAuthRes,
-    ProtoOAGetSymbolsReq,
-    ProtoOAGetSymbolsRes,
+    ProtoOASymbolsListReq,
+    ProtoOASymbolsListRes,
     ProtoOAGetTrendbarsReq,
     ProtoOAGetTrendbarsRes,
 )
@@ -96,8 +96,8 @@ class CTraderClient:
             self._authed = True
             self._lock.set()
 
-        elif msg_type == ProtoOAGetSymbolsRes().payloadType:
-            res = Protobuf.extract(message, ProtoOAGetSymbolsRes)
+        elif msg_type == ProtoOASymbolsListRes().payloadType:
+            res = Protobuf.extract(message, ProtoOASymbolsListRes)
             for sym in res.symbol:
                 self._symbols[sym.symbolName] = sym.symbolId
             log.info("%s símbolos carregados", len(self._symbols))
@@ -115,7 +115,7 @@ class CTraderClient:
 
     def load_symbols(self) -> dict[str, int]:
         """Carrega todos os símbolos disponíveis na conta."""
-        req = ProtoOAGetSymbolsReq()
+        req = ProtoOASymbolsListReq()
         req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
         key = "symbols"
         self._pending[key] = None
