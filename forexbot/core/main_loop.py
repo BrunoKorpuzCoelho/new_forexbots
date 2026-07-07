@@ -65,11 +65,8 @@ def _load_strategies() -> list:
     return strategies
 
 
-def run() -> None:
-    """Ponto de entrada do loop principal."""
-    _configure_logging()
-    log.info("ForexBot v2 a iniciar...")
-
+def connect_bot():
+    """Liga ao cTrader e devolve (client, broker, strategies, notifier)."""
     notifier = get_notifier()
     client = TradingCTraderClient(config.CTRADER_ACCESS_TOKEN)
 
@@ -99,9 +96,147 @@ def run() -> None:
         )
 
     client.load_trader_info()
-
     broker = CTraderBroker(client)
     strategies = _load_strategies()
+    log.info(
+        "Ligação pronta: %d símbolos | %d estratégias | DRY_RUN=%s",
+        len(symbols_map),
+        len(strategies),
+        config.DRY_RUN,
+    )
+    return client, broker, strategies, notifier
+
+
+def run_cycle(
+    client: TradingCTraderClient,
+    broker: CTraderBroker,
+    strategies: list,
+    notifier,
+) -> None:
+    """Executa um ciclo M15 completo (análise + ordens)."""
+    cycle_start = datetime.now(timezone.utc)
+    total_evals = len(config.SYMBOLS) * len(strategies)
+    stats = {"signals": 0, "trades": 0, "errors": 0, "no_signal": 0, "skipped": 0}
+
+    log.info("── Ciclo M15 %s UTC ──", cycle_start.strftime("%Y-%m-%d %H:%M"))
+    log.info(
+        "A analisar %d pares × %d estratégias = %d avaliações",
+        len(config.SYMBOLS),
+        len(strategies),
+        total_evals,
+    )
+
+    equity = broker.get_equity()
+    log.info("Equity da conta: $%.2f", equity)
+    if equity == 0.0:
+        notifier.send_warning("Equity", "Equity retornou 0 — usando fallback")
+        dl.log_error(
+            context="Equity",
+            message="Equity retornou 0 — usando fallback",
+            level="WARNING",
+        )
+
+    eval_n = 0
+    for symbol in config.SYMBOLS:
+        log.info("▸ Par %s", symbol)
+        for strategy in strategies:
+            eval_n += 1
+            label = f"[{strategy.name}][{symbol}]"
+            try:
+                log.info("%s (%d/%d) A obter velas M15...", label, eval_n, total_evals)
+                bars = client.get_candles(symbol, "M15", count=200)
+                candles = bars_to_candles(bars)
+
+                if not candles:
+                    stats["skipped"] += 1
+                    dl.log_no_signal(
+                        strategy.name, symbol, "sem velas recebidas", {}
+                    )
+                    continue
+
+                last = candles[-1]
+                log.info(
+                    "%s %d velas | última %s close=%.5f",
+                    label,
+                    len(candles),
+                    last.timestamp.strftime("%H:%M"),
+                    last.close,
+                )
+
+                signal = strategy.evaluate(symbol, candles)
+
+                if signal is not None:
+                    stats["signals"] += 1
+                    lot = risk_manager.lot_size(
+                        equity, signal.entry, signal.sl, symbol
+                    )
+                    log.info(
+                        "%s SINAL %s lot=%.2f RR=1:%.1f",
+                        label,
+                        signal.direction.value,
+                        lot,
+                        signal.rr_ratio,
+                    )
+                    if lot <= 0:
+                        stats["no_signal"] += 1
+                        dl.log_no_signal(
+                            strategy.name,
+                            symbol,
+                            "lot_size=0 — SL inválido",
+                            {"lot": lot},
+                        )
+                        continue
+
+                    ticket = broker.open_trade(signal, lot)
+                    if ticket:
+                        stats["trades"] += 1
+                        dl.log_trade_open(signal, lot, ticket)
+                        notifier.send_signal(signal, lot, ticket)
+                        log.info("%s TRADE ABERTO ticket=%s", label, ticket)
+                    else:
+                        log.warning("%s Sinal ignorado — ordem não executada", label)
+                else:
+                    stats["no_signal"] += 1
+
+            except Exception as e:
+                stats["errors"] += 1
+                log.error(
+                    "%s erro: %s",
+                    label,
+                    e,
+                    exc_info=True,
+                )
+                tb = traceback.format_exc()
+                notifier.send_error(
+                    context=f"Estratégia {strategy.name} · {symbol}",
+                    error=e,
+                    details=tb.split("\n")[-3] if tb else "",
+                )
+                dl.log_error(
+                    context=f"Estratégia {strategy.name} · {symbol}",
+                    message=str(e),
+                    traceback_str=tb,
+                )
+
+    elapsed = (datetime.now(timezone.utc) - cycle_start).total_seconds()
+    log.info(
+        "── Ciclo concluído em %.0fs | sinais=%d trades=%d "
+        "sem_sinal=%d sem_velas=%d erros=%d ──",
+        elapsed,
+        stats["signals"],
+        stats["trades"],
+        stats["no_signal"],
+        stats["skipped"],
+        stats["errors"],
+    )
+
+
+def run() -> None:
+    """Ponto de entrada do loop principal."""
+    _configure_logging()
+    log.info("ForexBot v2 a iniciar...")
+
+    client, broker, strategies, notifier = connect_bot()
 
     notifier.send(
         f"✅ <b>ForexBot v2 ligado</b>\n"
@@ -117,69 +252,11 @@ def run() -> None:
         target = next_m15_close()
         wait = (target - datetime.now(timezone.utc)).total_seconds()
         if wait > 0:
-            log.debug("Próximo ciclo em %.0fs (%s UTC)", wait, target.strftime("%H:%M"))
+            log.info(
+                "À espera do próximo M15 — %ds até %s UTC",
+                int(wait),
+                target.strftime("%Y-%m-%d %H:%M"),
+            )
             time.sleep(wait)
 
-        cycle_start = datetime.now(timezone.utc)
-        log.info("── Ciclo M15 %s UTC ──", cycle_start.strftime("%Y-%m-%d %H:%M"))
-
-        equity = broker.get_equity()
-        if equity == 0.0:
-            notifier.send_warning("Equity", "Equity retornou 0 — usando fallback")
-            dl.log_error(
-                context="Equity",
-                message="Equity retornou 0 — usando fallback",
-                level="WARNING",
-            )
-
-        for symbol in config.SYMBOLS:
-            for strategy in strategies:
-                try:
-                    bars = client.get_candles(symbol, "M15", count=200)
-                    candles = bars_to_candles(bars)
-
-                    if not candles:
-                        dl.log_no_signal(
-                            strategy.name, symbol, "sem velas recebidas", {}
-                        )
-                        continue
-
-                    signal = strategy.evaluate(symbol, candles)
-
-                    if signal is not None:
-                        lot = risk_manager.lot_size(
-                            equity, signal.entry, signal.sl, symbol
-                        )
-                        if lot <= 0:
-                            dl.log_no_signal(
-                                strategy.name,
-                                symbol,
-                                "lot_size=0 — SL inválido",
-                                {"lot": lot},
-                            )
-                            continue
-
-                        ticket = broker.open_trade(signal, lot)
-                        if ticket:
-                            dl.log_trade_open(signal, lot, ticket)
-                            notifier.send_signal(signal, lot, ticket)
-
-                except Exception as e:
-                    log.error(
-                        "[%s][%s] erro: %s",
-                        strategy.name,
-                        symbol,
-                        e,
-                        exc_info=True,
-                    )
-                    tb = traceback.format_exc()
-                    notifier.send_error(
-                        context=f"Estratégia {strategy.name} · {symbol}",
-                        error=e,
-                        details=tb.split("\n")[-3] if tb else "",
-                    )
-                    dl.log_error(
-                        context=f"Estratégia {strategy.name} · {symbol}",
-                        message=str(e),
-                        traceback_str=tb,
-                    )
+        run_cycle(client, broker, strategies, notifier)

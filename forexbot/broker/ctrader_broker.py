@@ -87,6 +87,8 @@ class TradingCTraderClient(CTraderClient):
 
         if msg_type == ProtoOAExecutionEvent().payloadType:
             res = Protobuf.extract(message)
+            exec_type = res.executionType if res.HasField("executionType") else "?"
+            log.info("ExecutionEvent recebido: type=%s account=%s", exec_type, res.ctidTraderAccountId)
             self._set_pending("exec_pending", res)
             if res.HasField("order") and res.order.orderId:
                 self._set_pending(f"exec_{res.order.orderId}", res)
@@ -163,7 +165,7 @@ class CTraderBroker:
                 trader.isLimitedRisk if trader.HasField("isLimitedRisk") else False
             )
             self._client._trader_loaded = True
-            log.debug("Equity obtido: %.2f", equity)
+            log.info("Equity obtido: $%.2f", equity)
             return float(equity)
         except Exception as e:
             log.error("Erro ao obter equity: %s", e)

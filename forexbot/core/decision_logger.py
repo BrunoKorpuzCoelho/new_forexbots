@@ -93,7 +93,7 @@ def log_no_signal(
         "indicators": indicators,
     }
     _write(record, ts)
-    log.debug("[%s][%s] NO_SIGNAL — %s", strategy, symbol, reason)
+    log.info("[%s][%s] NO_SIGNAL — %s", strategy, symbol, reason)
 
 
 def log_signal(signal: TradeSignal, indicators: dict) -> None:
