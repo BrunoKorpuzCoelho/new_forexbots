@@ -23,7 +23,8 @@
       border-bottom: 1px solid #0f3460;
     }
     nav .brand { font-weight: bold; font-size: 1.1rem; color: #fff; }
-    nav .links { display: flex; gap: 1rem; flex-wrap: wrap; }
+    nav .links { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+    nav .user { margin-left: auto; font-size: 0.85rem; color: #888; display: flex; gap: 0.75rem; align-items: center; }
     main { padding: 2rem; max-width: 1200px; margin: 0 auto; }
     h1 { margin-bottom: 1.5rem; color: #fff; font-size: 1.5rem; }
     h2 { margin: 1.5rem 0 0.75rem; color: #ccc; font-size: 1.1rem; }
@@ -124,6 +125,12 @@
       <a href="{% url 'strategy_detail' 'B' %}">Estratégia B</a>
       <a href="{% url 'strategy_detail' 'C' %}">Estratégia C</a>
     </div>
+    {% if user.is_authenticated %}
+    <div class="user">
+      <span>{{ user.username }}</span>
+      <a href="{% url 'logout' %}">Sair</a>
+    </div>
+    {% endif %}
   </nav>
   <main>
     {% block content %}{% endblock %}

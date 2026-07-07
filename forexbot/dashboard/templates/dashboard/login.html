@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — ForexBot v2</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-box {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 360px;
+    }
+    h1 { color: #fff; font-size: 1.25rem; margin-bottom: 0.25rem; }
+    p { color: #888; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    label { display: block; font-size: 0.85rem; color: #aaa; margin-bottom: 0.25rem; }
+    input {
+      width: 100%;
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      color: #e0e0e0;
+      padding: 0.6rem 0.75rem;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+    }
+    button {
+      width: 100%;
+      background: #0f3460;
+      color: #fff;
+      border: none;
+      padding: 0.65rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1rem;
+    }
+    button:hover { background: #4da6ff; }
+    .error {
+      background: #3d0000;
+      border: 1px solid #f44336;
+      color: #f44336;
+      padding: 0.75rem;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-box">
+    <h1>ForexBot v2</h1>
+    <p>Dashboard — inicia sessão</p>
+
+    {% if form.errors %}
+    <div class="error">Utilizador ou palavra-passe incorretos.</div>
+    {% endif %}
+
+    <form method="post">
+      {% csrf_token %}
+      <label for="id_username">Utilizador</label>
+      <input type="text" name="username" id="id_username" autofocus required>
+
+      <label for="id_password">Palavra-passe</label>
+      <input type="password" name="password" id="id_password" required>
+
+      <button type="submit">Entrar</button>
+    </form>
+  </div>
+</body>
+</html>

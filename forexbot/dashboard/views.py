@@ -1,6 +1,7 @@
 """Views do dashboard ForexBot v2."""
 from datetime import datetime, timedelta
 
+from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db.models import Avg, Count, Sum
 from django.http import Http404, HttpRequest, HttpResponse
@@ -47,6 +48,7 @@ def _recent_errors_count() -> int:
         return 0
 
 
+@login_required
 def index(request: HttpRequest) -> HttpResponse:
     """Página principal com resumo geral."""
     closed = _closed_trades_qs()
@@ -91,6 +93,7 @@ def index(request: HttpRequest) -> HttpResponse:
     return render(request, "dashboard/index.html", context)
 
 
+@login_required
 def strategy_detail(request: HttpRequest, strategy: str) -> HttpResponse:
     """Detalhe de uma estratégia."""
     strategy = strategy.upper()
@@ -116,6 +119,7 @@ def strategy_detail(request: HttpRequest, strategy: str) -> HttpResponse:
     return render(request, "dashboard/strategy.html", context)
 
 
+@login_required
 def logs_view(request: HttpRequest) -> HttpResponse:
     """Lista de decision logs com filtros."""
     qs = DecisionLog.objects.all()
@@ -155,6 +159,7 @@ def logs_view(request: HttpRequest) -> HttpResponse:
     return render(request, "dashboard/logs.html", context)
 
 
+@login_required
 def errors_view(request: HttpRequest) -> HttpResponse:
     """Lista de erros e avisos com filtros."""
     qs = ErrorLog.objects.all()
