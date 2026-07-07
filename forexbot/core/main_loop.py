@@ -23,6 +23,23 @@ from forexbot.strategies.strategy_c.strategy import StrategyC
 log = logging.getLogger(__name__)
 
 
+def _sync_dashboard() -> None:
+    """Importa logs JSONL para a base de dados do dashboard."""
+    try:
+        import os
+
+        import django
+
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dashboard_project.settings")
+        if not django.apps.apps.ready:
+            django.setup()
+        from django.core.management import call_command
+
+        call_command("import_logs", verbosity=0)
+    except Exception:
+        log.warning("Sync do dashboard falhou", exc_info=True)
+
+
 def bars_to_candles(bars: list) -> list[Candle]:
     """Converte barras cTrader (delta encoding) em objetos Candle."""
     candles = []
@@ -217,6 +234,8 @@ def run_cycle(
                     message=str(e),
                     traceback_str=tb,
                 )
+
+    _sync_dashboard()
 
     elapsed = (datetime.now(timezone.utc) - cycle_start).total_seconds()
     log.info(
