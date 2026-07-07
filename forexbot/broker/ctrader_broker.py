@@ -3,6 +3,7 @@ Broker de ordens cTrader — abrir/fechar posições e consultar equity.
 Estende CTraderClient via subclasse sem modificar o ficheiro base.
 """
 import logging
+import threading
 import time
 import uuid
 
@@ -41,6 +42,11 @@ class TradingCTraderClient(CTraderClient):
         self._money_digits = 2
         self._is_limited_risk = False
         self._trader_loaded = False
+        self._pending_lock = threading.Lock()
+
+    def _set_pending(self, key: str, value) -> None:
+        with self._pending_lock:
+            self._pending[key] = value
 
     def load_trader_info(self) -> bool:
         """Obtém balance, moneyDigits e flags da conta."""
@@ -63,13 +69,17 @@ class TradingCTraderClient(CTraderClient):
         )
         return True
 
-    def fire_request(self, request, response_timeout: int = 30) -> None:
-        """Envia pedido sem aguardar deferred (resposta via eventos)."""
-        deferred = self._client.send(
-            request, responseTimeoutInSeconds=response_timeout
-        )
+    def fire_request(self, request) -> None:
+        """Envia pedido imediatamente (fora da fila rate-limited de 5 msg/s)."""
+
+        def _send(protocol):
+            protocol.send(request, instant=True)
+            log.debug("Pedido enviado (instant) payloadType=%s", request.payloadType)
+
+        deferred = self._client.whenConnected(failAfterFailures=1)
+        deferred.addCallback(_send)
         deferred.addErrback(
-            lambda failure: log.debug("Deferred timeout (esperado em ordens): %s", failure)
+            lambda failure: log.error("fire_request falhou: %s", failure)
         )
 
     def _on_message(self, client, message) -> None:
@@ -77,17 +87,17 @@ class TradingCTraderClient(CTraderClient):
 
         if msg_type == ProtoOAExecutionEvent().payloadType:
             res = Protobuf.extract(message)
-            self._pending["exec_pending"] = res
+            self._set_pending("exec_pending", res)
             if res.HasField("order") and res.order.orderId:
-                self._pending[f"exec_{res.order.orderId}"] = res
+                self._set_pending(f"exec_{res.order.orderId}", res)
             if res.HasField("position") and res.position.positionId:
-                self._pending[f"exec_pos_{res.position.positionId}"] = res
+                self._set_pending(f"exec_pos_{res.position.positionId}", res)
             return
 
         if msg_type == ProtoOAOrderErrorEvent().payloadType:
             res = Protobuf.extract(message)
-            self._pending["order_error"] = res
-            self._pending["exec_pending"] = res
+            self._set_pending("order_error", res)
+            self._set_pending("exec_pending", res)
             log.error(
                 "Erro de ordem cTrader: %s — %s",
                 res.errorCode,
@@ -97,12 +107,12 @@ class TradingCTraderClient(CTraderClient):
 
         if msg_type == ProtoOATraderRes().payloadType:
             res = Protobuf.extract(message)
-            self._pending["trader"] = res
+            self._set_pending("trader", res)
             return
 
         if msg_type == ProtoOAReconcileRes().payloadType:
             res = Protobuf.extract(message)
-            self._pending["reconcile"] = res
+            self._set_pending("reconcile", res)
             return
 
         super()._on_message(client, message)
@@ -110,15 +120,17 @@ class TradingCTraderClient(CTraderClient):
     def wait_pending(self, key: str, timeout: float = 10.0):
         """Aguarda valor em _pending ou None se timeout."""
         for _ in range(int(timeout * 10)):
-            if self._pending.get(key) is not None:
-                return self._pending.pop(key)
+            with self._pending_lock:
+                if self._pending.get(key) is not None:
+                    return self._pending.pop(key)
             time.sleep(0.1)
         return None
 
     def send_and_wait(self, request, pending_key: str, timeout: float = 10.0):
         """Envia pedido e aguarda resposta associada."""
-        self._pending[pending_key] = None
-        self._client.send(request)
+        self._set_pending(pending_key, None)
+        deferred = self._client.send(request, responseTimeoutInSeconds=timeout)
+        deferred.addErrback(lambda failure: None)
         return self.wait_pending(pending_key, timeout)
 
 
@@ -200,8 +212,8 @@ class CTraderBroker:
                 req.relativeTakeProfit,
             )
 
-            self._client._pending["exec_pending"] = None
-            self._client._pending["order_error"] = None
+            self._client._set_pending("exec_pending", None)
+            self._client._set_pending("order_error", None)
             self._client.fire_request(req)
 
             exec_event = self._client.wait_pending("exec_pending", timeout=20)
@@ -245,7 +257,7 @@ class CTraderBroker:
             req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
             req.positionId = int(ticket)
 
-            self._client._pending["exec_pending"] = None
+            self._client._set_pending("exec_pending", None)
             self._client.fire_request(req)
 
             exec_event = self._client.wait_pending("exec_pending", timeout=20)
