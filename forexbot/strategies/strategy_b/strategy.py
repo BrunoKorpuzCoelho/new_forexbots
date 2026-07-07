@@ -20,6 +20,17 @@ RSI_OVERSOLD = 35
 RSI_OVERBOUGHT = 65
 
 
+def _bb_column_names(bb: pd.DataFrame) -> tuple[str, str, str] | None:
+    """Resolve nomes das bandas (variam entre versões do pandas-ta)."""
+    try:
+        lower = next(c for c in bb.columns if c.startswith("BBL_"))
+        middle = next(c for c in bb.columns if c.startswith("BBM_"))
+        upper = next(c for c in bb.columns if c.startswith("BBU_"))
+        return lower, middle, upper
+    except StopIteration:
+        return None
+
+
 class StrategyB(BaseStrategy):
 
     @property
@@ -45,13 +56,19 @@ class StrategyB(BaseStrategy):
             dl.log_no_signal("B", symbol, "indicadores não calculados", {})
             return None
 
+        bb_cols = _bb_column_names(bb)
+        if bb_cols is None:
+            dl.log_no_signal("B", symbol, "colunas BB não encontradas", {"cols": list(bb.columns)})
+            return None
+
+        lower_col, middle_col, upper_col = bb_cols
         df = pd.concat([df, bb, rsi.rename("rsi"), atr.rename("atr")], axis=1)
         curr = df.iloc[-2]
         last_candle = candles[-2]
 
-        lower = curr["BBL_20_2.0"]
-        middle = curr["BBM_20_2.0"]
-        upper = curr["BBU_20_2.0"]
+        lower = curr[lower_col]
+        middle = curr[middle_col]
+        upper = curr[upper_col]
         close = curr["close"]
         rsi_v = curr["rsi"]
         atr_v = curr["atr"]
