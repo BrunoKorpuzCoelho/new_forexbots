@@ -33,55 +33,66 @@ from forexbot.core.signal import Direction, TradeSignal
 log = logging.getLogger(__name__)
 
 DEFAULT_EQUITY = 10000.0
-VOLUME_SCALE = 100  # cTrader: volume em 0.01 de unidade (1.00 lot = 100)
 PRICE_SCALE = 100000  # relative SL/TP em 1/100000 de unidade de preço
 PRICE_SCALE_DIGITS = 5
+# cTrader Open API: volume/minVolume/stepVolume/lotSize estão na mesma unidade
+# (inteiros ×100 vs UI). volume_protocol = lots × lotSize (ProtoOASymbol.lotSize).
+# Ref: help.ctrader.com/open-api + forum Spotware (0.01 lot = 100_000 se lotSize=10M).
 
 
 @dataclass(frozen=True)
 class SymbolInfo:
     symbol_id: int
     digits: int
+    lot_size: int
     min_volume: int
     step_volume: int
     max_volume: int
     sl_distance: int
     tp_distance: int
+    measurement_units: str = ""
 
     @classmethod
-    def from_proto(cls, sym) -> "SymbolInfo":
+    def from_proto(cls, sym) -> "SymbolInfo | None":
+        lot_size = sym.lotSize if sym.HasField("lotSize") else 0
+        if lot_size <= 0:
+            return None
         return cls(
             symbol_id=sym.symbolId,
             digits=sym.digits,
-            min_volume=sym.minVolume if sym.HasField("minVolume") else 1,
+            lot_size=lot_size,
+            min_volume=sym.minVolume if sym.HasField("minVolume") else lot_size // 100,
             step_volume=sym.stepVolume if sym.HasField("stepVolume") else 1,
             max_volume=sym.maxVolume if sym.HasField("maxVolume") else 0,
             sl_distance=sym.slDistance if sym.HasField("slDistance") else 0,
             tp_distance=sym.tpDistance if sym.HasField("tpDistance") else 0,
+            measurement_units=(
+                sym.measurementUnits if sym.HasField("measurementUnits") else ""
+            ),
         )
 
 
-def lots_to_protocol_volume(lot: float) -> int:
-    return int(round(lot * VOLUME_SCALE))
+def lots_to_protocol_volume(lot: float, lot_size: int) -> int:
+    return int(round(lot * lot_size))
 
 
-def protocol_volume_to_lots(volume: int) -> float:
-    return volume / VOLUME_SCALE
+def protocol_volume_to_lots(volume: int, lot_size: int) -> float:
+    return volume / lot_size
 
 
 def normalize_volume(lot: float, info: SymbolInfo) -> int | None:
     """Converte lote para volume protocolo respeitando min/step/max do símbolo."""
-    raw = lots_to_protocol_volume(lot)
+    raw = lots_to_protocol_volume(lot, info.lot_size)
     min_v = max(info.min_volume, 1)
     step_v = max(info.step_volume, 1)
     max_v = info.max_volume or raw
 
     if raw < min_v:
         log.warning(
-            "Volume %.2f lot (%d) < minVolume %.2f lot (%d)",
+            "Volume %.2f lot (%d) < minVolume %.4f lot (%d)",
             lot,
             raw,
-            protocol_volume_to_lots(min_v),
+            protocol_volume_to_lots(min_v, info.lot_size),
             min_v,
         )
         return None
@@ -90,11 +101,11 @@ def normalize_volume(lot: float, info: SymbolInfo) -> int | None:
     volume = min_v + steps * step_v
     if volume > max_v:
         log.warning(
-            "Volume normalizado %d (%.2f lot) > maxVolume %d (%.2f lot)",
+            "Volume normalizado %d (%.4f lot) > maxVolume %d (%.4f lot)",
             volume,
-            protocol_volume_to_lots(volume),
+            protocol_volume_to_lots(volume, info.lot_size),
             max_v,
-            protocol_volume_to_lots(max_v),
+            protocol_volume_to_lots(max_v, info.lot_size),
         )
         return None
     return volume
@@ -224,12 +235,17 @@ class TradingCTraderClient(CTraderClient):
             return None
 
         info = SymbolInfo.from_proto(res.symbol[0])
+        if info is None:
+            log.error("lotSize em falta para %s (id=%s)", symbol, sym_id)
+            return None
         self._symbol_cache[sym_id] = info
         log.debug(
-            "%s: digits=%d minVol=%d stepVol=%d slDist=%d",
+            "%s: digits=%d lotSize=%d minVol=%d (%.4f lot) stepVol=%d slDist=%d",
             symbol,
             info.digits,
+            info.lot_size,
             info.min_volume,
+            protocol_volume_to_lots(info.min_volume, info.lot_size),
             info.step_volume,
             info.sl_distance,
         )
@@ -303,11 +319,11 @@ class CTraderBroker:
             volume = normalize_volume(lot, sym_info)
             if volume is None:
                 log.error(
-                    "Volume inválido para %s: lot=%.2f min=%.2f step=%.2f",
+                    "Volume inválido para %s: lot=%.2f min=%.4f step=%.4f",
                     signal.symbol,
                     lot,
-                    protocol_volume_to_lots(sym_info.min_volume),
-                    protocol_volume_to_lots(sym_info.step_volume),
+                    protocol_volume_to_lots(sym_info.min_volume, sym_info.lot_size),
+                    protocol_volume_to_lots(sym_info.step_volume, sym_info.lot_size),
                 )
                 return ""
 
@@ -346,11 +362,12 @@ class CTraderBroker:
                 req.guaranteedStopLoss = True
             req.volume = volume
 
+            exec_lots = protocol_volume_to_lots(volume, sym_info.lot_size)
             log.info(
-                "A enviar ordem %s %s lot=%.2f vol=%d sl=%s tp=%s",
+                "A enviar ordem %s %s lot=%.4f vol=%d sl=%s tp=%s",
                 signal.symbol,
                 signal.direction.value,
-                protocol_volume_to_lots(volume),
+                exec_lots,
                 volume,
                 rel_sl,
                 rel_tp,
@@ -431,11 +448,13 @@ class CTraderBroker:
                 td = pos.tradeData
                 direction = "LONG" if td.tradeSide == ProtoOATradeSide.BUY else "SHORT"
                 entry = td.price if hasattr(td, "price") else 0.0
+                sym_info = self._client._symbol_cache.get(td.symbolId)
+                lot_size = sym_info.lot_size if sym_info else 1
                 positions.append({
                     "ticket": str(pos.positionId),
                     "symbol_id": td.symbolId,
                     "direction": direction,
-                    "volume": td.volume / VOLUME_SCALE,
+                    "volume": td.volume / lot_size if lot_size else td.volume,
                     "entry": entry,
                     "sl": pos.stopLoss if pos.HasField("stopLoss") else 0.0,
                     "tp": pos.takeProfit if pos.HasField("takeProfit") else 0.0,
