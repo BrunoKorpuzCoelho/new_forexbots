@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from forexbot.core.main_loop import _configure_logging, connect_bot, run_cycle
 
+log = logging.getLogger(__name__)
+
 
 def main() -> None:
     logging.basicConfig(
