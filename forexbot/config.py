@@ -29,7 +29,7 @@ RISK_PCT = float(os.getenv("RISK_PCT", "1.0"))
 # ── Django ───────────────────────────────────────────────
 DJANGO_SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "change-me")
 DJANGO_DEBUG      = os.getenv("DJANGO_DEBUG", "True") == "True"
-DJANGO_PORT       = int(os.getenv("DJANGO_PORT", "8000"))
+DJANGO_PORT       = int(os.getenv("DJANGO_PORT", "9999"))
 
 # ── Estratégias ──────────────────────────────────────────
 STRATEGY_A_ENABLED = os.getenv("STRATEGY_A_ENABLED", "true").lower() == "true"
