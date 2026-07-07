@@ -5,6 +5,7 @@ Gere a ligação, autenticação da app, e pedidos de dados.
 import logging
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 from ctrader_open_api import Client, Protobuf, TcpProtocol
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -31,6 +32,15 @@ PERIOD_MAP = {
     "H1": ProtoOATrendbarPeriod.H1,
     "H4": ProtoOATrendbarPeriod.H4,
     "D1": ProtoOATrendbarPeriod.D1,
+}
+
+PERIOD_MINUTES = {
+    "M1": 1,
+    "M5": 5,
+    "M15": 15,
+    "H1": 60,
+    "H4": 240,
+    "D1": 1440,
 }
 
 
@@ -136,10 +146,17 @@ class CTraderClient:
             return []
 
         period = PERIOD_MAP.get(timeframe, ProtoOATrendbarPeriod.M15)
+        minutes = PERIOD_MINUTES.get(timeframe, 15)
+        now = datetime.now(timezone.utc)
+        to_ts = int(now.timestamp() * 1000)
+        from_ts = int((now - timedelta(minutes=minutes * count)).timestamp() * 1000)
+
         req = ProtoOAGetTrendbarsReq()
         req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
         req.symbolId = sym_id
         req.period = period
+        req.fromTimestamp = from_ts
+        req.toTimestamp = to_ts
         req.count = count
 
         key = f"bars_{sym_id}"

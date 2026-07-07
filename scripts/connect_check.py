@@ -33,10 +33,12 @@ def main():
     candles = client.get_candles("EURUSD", "M15", count=5)
     if candles:
         for c in candles[-5:]:
-            low = c.low
             print(
-                f"   Open={low + c.open} High={low + c.high} "
-                f"Low={low} Close={low + c.close} Vol={c.volume}"
+                f"   Open={c.low + c.deltaOpen / 100000:.5f} "
+                f"High={c.low + c.deltaHigh / 100000:.5f} "
+                f"Low={c.low / 100000:.5f} "
+                f"Close={c.low + c.deltaClose / 100000:.5f} "
+                f"Vol={c.volume}"
             )
     else:
         raise RuntimeError("Sem velas recebidas — verificar simbolo ou token")

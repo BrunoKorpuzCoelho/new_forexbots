@@ -31,10 +31,10 @@ def bars_to_candles(bars: list) -> list[Candle]:
         ts = datetime.fromtimestamp(bar.utcTimestampInMinutes * 60, tz=timezone.utc)
         candles.append(Candle(
             timestamp=ts,
-            open=low + bar.open / 100000,
-            high=low + bar.high / 100000,
+            open=low + bar.deltaOpen / 100000,
+            high=low + bar.deltaHigh / 100000,
             low=low,
-            close=low + bar.close / 100000,
+            close=low + bar.deltaClose / 100000,
             volume=float(bar.volume),
         ))
     return candles
