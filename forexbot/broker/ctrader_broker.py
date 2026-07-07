@@ -50,7 +50,6 @@ class SymbolInfo:
     max_volume: int
     sl_distance: int
     tp_distance: int
-    measurement_units: str = ""
 
     @classmethod
     def from_proto(cls, sym) -> "SymbolInfo | None":
@@ -66,9 +65,6 @@ class SymbolInfo:
             max_volume=sym.maxVolume if sym.HasField("maxVolume") else 0,
             sl_distance=sym.slDistance if sym.HasField("slDistance") else 0,
             tp_distance=sym.tpDistance if sym.HasField("tpDistance") else 0,
-            measurement_units=(
-                sym.measurementUnits if sym.HasField("measurementUnits") else ""
-            ),
         )
 
 
