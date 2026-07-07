@@ -11,8 +11,11 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAClosePositionReq,
     ProtoOAExecutionEvent,
     ProtoOANewOrderReq,
+    ProtoOAOrderErrorEvent,
     ProtoOAReconcileReq,
     ProtoOAReconcileRes,
+    ProtoOATraderReq,
+    ProtoOATraderRes,
 )
 from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
     ProtoOAOrderType,
@@ -33,6 +36,42 @@ PRICE_SCALE = 100000  # relative SL/TP em 1/100000 de unidade de preço
 class TradingCTraderClient(CTraderClient):
     """CTraderClient com suporte a execução de ordens e reconcile."""
 
+    def __init__(self, access_token: str):
+        super().__init__(access_token)
+        self._money_digits = 2
+        self._is_limited_risk = False
+        self._trader_loaded = False
+
+    def load_trader_info(self) -> bool:
+        """Obtém balance, moneyDigits e flags da conta."""
+        req = ProtoOATraderReq()
+        req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
+        res = self.send_and_wait(req, "trader", timeout=10)
+        if res is None:
+            return False
+
+        trader = res.trader
+        self._money_digits = trader.moneyDigits if trader.HasField("moneyDigits") else 2
+        self._is_limited_risk = bool(
+            trader.isLimitedRisk if trader.HasField("isLimitedRisk") else False
+        )
+        self._trader_loaded = True
+        log.info(
+            "Conta carregada: balance=%.2f limitedRisk=%s",
+            trader.balance / (10 ** self._money_digits),
+            self._is_limited_risk,
+        )
+        return True
+
+    def fire_request(self, request, response_timeout: int = 30) -> None:
+        """Envia pedido sem aguardar deferred (resposta via eventos)."""
+        deferred = self._client.send(
+            request, responseTimeoutInSeconds=response_timeout
+        )
+        deferred.addErrback(
+            lambda failure: log.debug("Deferred timeout (esperado em ordens): %s", failure)
+        )
+
     def _on_message(self, client, message) -> None:
         msg_type = message.payloadType
 
@@ -43,6 +82,22 @@ class TradingCTraderClient(CTraderClient):
                 self._pending[f"exec_{res.order.orderId}"] = res
             if res.HasField("position") and res.position.positionId:
                 self._pending[f"exec_pos_{res.position.positionId}"] = res
+            return
+
+        if msg_type == ProtoOAOrderErrorEvent().payloadType:
+            res = Protobuf.extract(message)
+            self._pending["order_error"] = res
+            self._pending["exec_pending"] = res
+            log.error(
+                "Erro de ordem cTrader: %s — %s",
+                res.errorCode,
+                res.description if res.HasField("description") else "",
+            )
+            return
+
+        if msg_type == ProtoOATraderRes().payloadType:
+            res = Protobuf.extract(message)
+            self._pending["trader"] = res
             return
 
         if msg_type == ProtoOAReconcileRes().payloadType:
@@ -74,22 +129,30 @@ class CTraderBroker:
         self._client = client
 
     def get_equity(self) -> float:
-        """Obtém balance/equity da conta via reconcile."""
+        """Obtém balance da conta via ProtoOATraderReq."""
         try:
-            req = ProtoOAReconcileReq()
+            if not self._client._trader_loaded:
+                if not self._client.load_trader_info():
+                    log.warning("Timeout ao obter trader info — a usar fallback demo")
+                    return DEFAULT_EQUITY
+
+            req = ProtoOATraderReq()
             req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
-            res = self._client.send_and_wait(req, "reconcile", timeout=10)
+            res = self._client.send_and_wait(req, "trader", timeout=10)
             if res is None:
                 log.warning("Timeout ao obter equity — a usar fallback demo")
                 return DEFAULT_EQUITY
 
-            if hasattr(res, "balance") and res.balance:
-                equity = res.balance / 100.0
-                log.debug("Equity obtido: %.2f", equity)
-                return float(equity)
-
-            log.warning("Reconcile sem balance — a usar fallback demo")
-            return DEFAULT_EQUITY
+            trader = res.trader
+            digits = trader.moneyDigits if trader.HasField("moneyDigits") else 2
+            equity = trader.balance / (10 ** digits)
+            self._client._money_digits = digits
+            self._client._is_limited_risk = bool(
+                trader.isLimitedRisk if trader.HasField("isLimitedRisk") else False
+            )
+            self._client._trader_loaded = True
+            log.debug("Equity obtido: %.2f", equity)
+            return float(equity)
         except Exception as e:
             log.error("Erro ao obter equity: %s", e)
             return DEFAULT_EQUITY
@@ -116,14 +179,51 @@ class CTraderBroker:
                 if signal.direction == Direction.LONG
                 else ProtoOATradeSide.SELL
             )
-            req.volume = int(round(lot * VOLUME_SCALE))
             req.relativeStopLoss = int(abs(signal.entry - signal.sl) * PRICE_SCALE)
             req.relativeTakeProfit = int(abs(signal.tp - signal.entry) * PRICE_SCALE)
             req.clientOrderId = str(uuid.uuid4())[:16]
+            if self._client._is_limited_risk:
+                req.guaranteedStopLoss = True
 
-            exec_event = self._client.send_and_wait(req, "exec_pending", timeout=10)
+            volume = int(round(lot * VOLUME_SCALE))
+            if volume < 1:
+                log.error("Volume inválido para %s: %s", signal.symbol, volume)
+                return ""
+            req.volume = volume
+
+            log.info(
+                "A enviar ordem %s %s vol=%s sl=%s tp=%s",
+                signal.symbol,
+                signal.direction.value,
+                volume,
+                req.relativeStopLoss,
+                req.relativeTakeProfit,
+            )
+
+            self._client._pending["exec_pending"] = None
+            self._client._pending["order_error"] = None
+            self._client.fire_request(req)
+
+            exec_event = self._client.wait_pending("exec_pending", timeout=20)
             if exec_event is None:
                 log.error("Timeout ao abrir ordem para %s", signal.symbol)
+                return ""
+
+            if isinstance(exec_event, ProtoOAOrderErrorEvent):
+                log.error(
+                    "Ordem rejeitada [%s]: %s — %s",
+                    signal.symbol,
+                    exec_event.errorCode,
+                    exec_event.description if exec_event.HasField("description") else "",
+                )
+                return ""
+
+            if exec_event.HasField("errorCode") and exec_event.errorCode:
+                log.error(
+                    "Execução com erro [%s]: %s",
+                    signal.symbol,
+                    exec_event.errorCode,
+                )
                 return ""
 
             ticket = self._extract_ticket(exec_event)
@@ -145,7 +245,10 @@ class CTraderBroker:
             req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
             req.positionId = int(ticket)
 
-            exec_event = self._client.send_and_wait(req, "exec_pending", timeout=10)
+            self._client._pending["exec_pending"] = None
+            self._client.fire_request(req)
+
+            exec_event = self._client.wait_pending("exec_pending", timeout=20)
             if exec_event is None:
                 log.error("Timeout ao fechar posição %s", ticket)
                 return False

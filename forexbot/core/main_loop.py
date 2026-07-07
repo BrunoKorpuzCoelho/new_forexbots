@@ -98,6 +98,8 @@ def run() -> None:
             level="WARNING",
         )
 
+    client.load_trader_info()
+
     broker = CTraderBroker(client)
     strategies = _load_strategies()
 

@@ -22,6 +22,8 @@ MAX_LOT = 10.0
 
 def pip_multiplier(symbol: str) -> float:
     """Converte diferença de preço em pips."""
+    if symbol.endswith("JPY"):
+        return 100.0
     if symbol in ("XAUUSD", "XAGUSD"):
         return 10.0
     if symbol in ("BTCUSD", "ETHUSD"):
