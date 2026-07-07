@@ -17,7 +17,6 @@ PIP_VALUE_PER_LOT: dict[str, float] = {
 }
 
 MIN_LOT = 0.01
-MAX_LOT = 2.0
 
 
 def pip_multiplier(symbol: str) -> float:
@@ -57,7 +56,9 @@ def lot_size(equity: float, entry: float, sl: float, symbol: str) -> float:
         return MIN_LOT
 
     lot = risk_amount / (sl_pips * pip_value(symbol))
-    lot = round(max(MIN_LOT, min(MAX_LOT, lot)), 2)
+    if config.MAX_LOT is not None:
+        lot = min(config.MAX_LOT, lot)
+    lot = round(max(MIN_LOT, lot), 2)
     log.debug(
         "lot_size: equity=%.2f risk=%.2f sl_pips=%.1f lot=%.2f",
         equity,

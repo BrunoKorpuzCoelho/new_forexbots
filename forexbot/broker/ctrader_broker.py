@@ -84,14 +84,14 @@ def normalize_volume(lot: float, info: SymbolInfo) -> int | None:
     max_v = info.max_volume or raw
 
     if raw < min_v:
-        log.warning(
-            "Volume %.2f lot (%d) < minVolume %.4f lot (%d)",
+        log.info(
+            "Volume %.4f lot (%d) < minVolume %.4f lot (%d) — a usar mínimo",
             lot,
             raw,
             protocol_volume_to_lots(min_v, info.lot_size),
             min_v,
         )
-        return None
+        raw = min_v
 
     steps = (raw - min_v + step_v - 1) // step_v
     volume = min_v + steps * step_v
