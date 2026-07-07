@@ -97,7 +97,7 @@ class CTraderClient:
             self._lock.set()
 
         elif msg_type == ProtoOASymbolsListRes().payloadType:
-            res = Protobuf.extract(message, ProtoOASymbolsListRes)
+            res = Protobuf.extract(message)
             for sym in res.symbol:
                 self._symbols[sym.symbolName] = sym.symbolId
             log.info("%s símbolos carregados", len(self._symbols))
@@ -105,7 +105,7 @@ class CTraderClient:
                 self._pending["symbols"] = self._symbols.copy()
 
         elif msg_type == ProtoOAGetTrendbarsRes().payloadType:
-            res = Protobuf.extract(message, ProtoOAGetTrendbarsRes)
+            res = Protobuf.extract(message)
             key = f"bars_{res.symbolId}"
             if key in self._pending:
                 self._pending[key] = list(res.trendbar)

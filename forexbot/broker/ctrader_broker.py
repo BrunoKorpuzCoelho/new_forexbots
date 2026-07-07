@@ -37,7 +37,7 @@ class TradingCTraderClient(CTraderClient):
         msg_type = message.payloadType
 
         if msg_type == ProtoOAExecutionEvent().payloadType:
-            res = Protobuf.extract(message, ProtoOAExecutionEvent)
+            res = Protobuf.extract(message)
             self._pending["exec_pending"] = res
             if res.HasField("order") and res.order.orderId:
                 self._pending[f"exec_{res.order.orderId}"] = res
@@ -46,7 +46,7 @@ class TradingCTraderClient(CTraderClient):
             return
 
         if msg_type == ProtoOAReconcileRes().payloadType:
-            res = Protobuf.extract(message, ProtoOAReconcileRes)
+            res = Protobuf.extract(message)
             self._pending["reconcile"] = res
             return
 
