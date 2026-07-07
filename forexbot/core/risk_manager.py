@@ -17,7 +17,7 @@ PIP_VALUE_PER_LOT: dict[str, float] = {
 }
 
 MIN_LOT = 0.01
-MAX_LOT = 10.0
+MAX_LOT = 2.0
 
 
 def pip_multiplier(symbol: str) -> float:

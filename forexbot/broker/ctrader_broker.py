@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 
 from ctrader_open_api import Protobuf
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
@@ -15,6 +16,8 @@ from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAOrderErrorEvent,
     ProtoOAReconcileReq,
     ProtoOAReconcileRes,
+    ProtoOASymbolByIdReq,
+    ProtoOASymbolByIdRes,
     ProtoOATraderReq,
     ProtoOATraderRes,
 )
@@ -32,6 +35,85 @@ log = logging.getLogger(__name__)
 DEFAULT_EQUITY = 10000.0
 VOLUME_SCALE = 100  # cTrader: volume em 0.01 de unidade (1.00 lot = 100)
 PRICE_SCALE = 100000  # relative SL/TP em 1/100000 de unidade de preço
+PRICE_SCALE_DIGITS = 5
+
+
+@dataclass(frozen=True)
+class SymbolInfo:
+    symbol_id: int
+    digits: int
+    min_volume: int
+    step_volume: int
+    max_volume: int
+    sl_distance: int
+    tp_distance: int
+
+    @classmethod
+    def from_proto(cls, sym) -> "SymbolInfo":
+        return cls(
+            symbol_id=sym.symbolId,
+            digits=sym.digits,
+            min_volume=sym.minVolume if sym.HasField("minVolume") else 1,
+            step_volume=sym.stepVolume if sym.HasField("stepVolume") else 1,
+            max_volume=sym.maxVolume if sym.HasField("maxVolume") else 0,
+            sl_distance=sym.slDistance if sym.HasField("slDistance") else 0,
+            tp_distance=sym.tpDistance if sym.HasField("tpDistance") else 0,
+        )
+
+
+def lots_to_protocol_volume(lot: float) -> int:
+    return int(round(lot * VOLUME_SCALE))
+
+
+def protocol_volume_to_lots(volume: int) -> float:
+    return volume / VOLUME_SCALE
+
+
+def normalize_volume(lot: float, info: SymbolInfo) -> int | None:
+    """Converte lote para volume protocolo respeitando min/step/max do símbolo."""
+    raw = lots_to_protocol_volume(lot)
+    min_v = max(info.min_volume, 1)
+    step_v = max(info.step_volume, 1)
+    max_v = info.max_volume or raw
+
+    if raw < min_v:
+        log.warning(
+            "Volume %.2f lot (%d) < minVolume %.2f lot (%d)",
+            lot,
+            raw,
+            protocol_volume_to_lots(min_v),
+            min_v,
+        )
+        return None
+
+    steps = (raw - min_v + step_v - 1) // step_v
+    volume = min_v + steps * step_v
+    if volume > max_v:
+        log.warning(
+            "Volume normalizado %d (%.2f lot) > maxVolume %d (%.2f lot)",
+            volume,
+            protocol_volume_to_lots(volume),
+            max_v,
+            protocol_volume_to_lots(max_v),
+        )
+        return None
+    return volume
+
+
+def to_relative_price_delta(
+    price_delta: float,
+    digits: int,
+    min_points: int = 0,
+) -> int:
+    """Converte distância de preço para relativeStopLoss/TakeProfit (1/100000)."""
+    tick_rel = 10 ** max(0, PRICE_SCALE_DIGITS - digits)
+    rel = int(round(abs(price_delta) * PRICE_SCALE))
+    rel = max(tick_rel, rel)
+    rel = ((rel + tick_rel // 2) // tick_rel) * tick_rel
+    if min_points > 0:
+        min_rel = min_points * tick_rel
+        rel = max(rel, min_rel)
+    return rel
 
 
 class TradingCTraderClient(CTraderClient):
@@ -43,6 +125,7 @@ class TradingCTraderClient(CTraderClient):
         self._is_limited_risk = False
         self._trader_loaded = False
         self._pending_lock = threading.Lock()
+        self._symbol_cache: dict[int, SymbolInfo] = {}
 
     def _set_pending(self, key: str, value) -> None:
         with self._pending_lock:
@@ -117,7 +200,40 @@ class TradingCTraderClient(CTraderClient):
             self._set_pending("reconcile", res)
             return
 
+        if msg_type == ProtoOASymbolByIdRes().payloadType:
+            res = Protobuf.extract(message)
+            self._set_pending("symbol_by_id", res)
+            return
+
         super()._on_message(client, message)
+
+    def get_symbol_info(self, symbol: str) -> SymbolInfo | None:
+        """Obtém metadados do símbolo (min/step volume, digits, SL mínimo)."""
+        sym_id = self.get_symbol_id(symbol)
+        if sym_id is None:
+            return None
+        if sym_id in self._symbol_cache:
+            return self._symbol_cache[sym_id]
+
+        req = ProtoOASymbolByIdReq()
+        req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
+        req.symbolId.append(sym_id)
+        res = self.send_and_wait(req, "symbol_by_id", timeout=10)
+        if res is None or not res.symbol:
+            log.error("Sem metadados para símbolo %s (id=%s)", symbol, sym_id)
+            return None
+
+        info = SymbolInfo.from_proto(res.symbol[0])
+        self._symbol_cache[sym_id] = info
+        log.debug(
+            "%s: digits=%d minVol=%d stepVol=%d slDist=%d",
+            symbol,
+            info.digits,
+            info.min_volume,
+            info.step_volume,
+            info.sl_distance,
+        )
+        return info
 
     def wait_pending(self, key: str, timeout: float = 10.0):
         """Aguarda valor em _pending ou None se timeout."""
@@ -178,40 +294,66 @@ class CTraderBroker:
             log.info("[DRY_RUN] Ordem simulada: %s %s lot=%.2f", signal.symbol, ticket, lot)
             return ticket
 
-        sym_id = self._client.get_symbol_id(signal.symbol)
-        if sym_id is None:
+        sym_info = self._client.get_symbol_info(signal.symbol)
+        if sym_info is None:
             log.error("Símbolo não encontrado para ordem: %s", signal.symbol)
             return ""
 
         try:
+            volume = normalize_volume(lot, sym_info)
+            if volume is None:
+                log.error(
+                    "Volume inválido para %s: lot=%.2f min=%.2f step=%.2f",
+                    signal.symbol,
+                    lot,
+                    protocol_volume_to_lots(sym_info.min_volume),
+                    protocol_volume_to_lots(sym_info.step_volume),
+                )
+                return ""
+
+            rel_sl = to_relative_price_delta(
+                signal.entry - signal.sl,
+                sym_info.digits,
+                sym_info.sl_distance,
+            )
+            rel_tp = to_relative_price_delta(
+                signal.tp - signal.entry,
+                sym_info.digits,
+                sym_info.tp_distance,
+            )
+            if rel_sl <= 0 or rel_tp <= 0:
+                log.error(
+                    "SL/TP relativo inválido para %s: sl=%s tp=%s",
+                    signal.symbol,
+                    rel_sl,
+                    rel_tp,
+                )
+                return ""
+
             req = ProtoOANewOrderReq()
             req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
-            req.symbolId = sym_id
+            req.symbolId = sym_info.symbol_id
             req.orderType = ProtoOAOrderType.MARKET
             req.tradeSide = (
                 ProtoOATradeSide.BUY
                 if signal.direction == Direction.LONG
                 else ProtoOATradeSide.SELL
             )
-            req.relativeStopLoss = int(abs(signal.entry - signal.sl) * PRICE_SCALE)
-            req.relativeTakeProfit = int(abs(signal.tp - signal.entry) * PRICE_SCALE)
+            req.relativeStopLoss = rel_sl
+            req.relativeTakeProfit = rel_tp
             req.clientOrderId = str(uuid.uuid4())[:16]
             if self._client._is_limited_risk:
                 req.guaranteedStopLoss = True
-
-            volume = int(round(lot * VOLUME_SCALE))
-            if volume < 1:
-                log.error("Volume inválido para %s: %s", signal.symbol, volume)
-                return ""
             req.volume = volume
 
             log.info(
-                "A enviar ordem %s %s vol=%s sl=%s tp=%s",
+                "A enviar ordem %s %s lot=%.2f vol=%d sl=%s tp=%s",
                 signal.symbol,
                 signal.direction.value,
+                protocol_volume_to_lots(volume),
                 volume,
-                req.relativeStopLoss,
-                req.relativeTakeProfit,
+                rel_sl,
+                rel_tp,
             )
 
             self._client._set_pending("exec_pending", None)
