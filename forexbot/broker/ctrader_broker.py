@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from ctrader_open_api import Protobuf
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
     ProtoOAClosePositionReq,
+    ProtoOADealListByPositionIdReq,
+    ProtoOADealListByPositionIdRes,
     ProtoOAExecutionEvent,
     ProtoOANewOrderReq,
     ProtoOAOrderErrorEvent,
@@ -43,7 +45,9 @@ PRICE_SCALE_DIGITS = 5
 @dataclass(frozen=True)
 class SymbolInfo:
     symbol_id: int
+    name: str
     digits: int
+    pip_position: int
     lot_size: int
     min_volume: int
     step_volume: int
@@ -52,13 +56,16 @@ class SymbolInfo:
     tp_distance: int
 
     @classmethod
-    def from_proto(cls, sym) -> "SymbolInfo | None":
+    def from_proto(cls, sym, name: str = "") -> "SymbolInfo | None":
         lot_size = sym.lotSize if sym.HasField("lotSize") else 0
         if lot_size <= 0:
             return None
+        pip_pos = sym.pipPosition if sym.HasField("pipPosition") else max(sym.digits - 1, 0)
         return cls(
             symbol_id=sym.symbolId,
+            name=name or (sym.symbolName if sym.HasField("symbolName") else ""),
             digits=sym.digits,
+            pip_position=pip_pos,
             lot_size=lot_size,
             min_volume=sym.minVolume if sym.HasField("minVolume") else lot_size // 100,
             step_volume=sym.stepVolume if sym.HasField("stepVolume") else 1,
@@ -68,22 +75,27 @@ class SymbolInfo:
         )
 
 
-def lots_to_protocol_volume(lot: float, lot_size: int) -> int:
-    return int(round(lot * lot_size))
+def pip_size_from_info(info: SymbolInfo) -> float:
+    return 10 ** (-info.pip_position)
 
 
-def protocol_volume_to_lots(volume: int, lot_size: int) -> float:
-    return volume / lot_size
-
-
-def normalize_volume(lot: float, info: SymbolInfo) -> int | None:
-    """Converte lote para volume protocolo respeitando min/step/max do símbolo."""
+def _volume_from_lot(lot: float, info: SymbolInfo, *, strict: bool) -> int | None:
+    """Converte lote para volume protocolo respeitando min/step/max."""
     raw = lots_to_protocol_volume(lot, info.lot_size)
     min_v = max(info.min_volume, 1)
     step_v = max(info.step_volume, 1)
     max_v = info.max_volume or raw
 
     if raw < min_v:
+        if strict:
+            log.warning(
+                "Volume %.4f lot (%d) < minVolume %.4f lot (%d) — rejeitado",
+                lot,
+                raw,
+                protocol_volume_to_lots(min_v, info.lot_size),
+                min_v,
+            )
+            return None
         log.info(
             "Volume %.4f lot (%d) < minVolume %.4f lot (%d) — a usar mínimo",
             lot,
@@ -105,6 +117,60 @@ def normalize_volume(lot: float, info: SymbolInfo) -> int | None:
         )
         return None
     return volume
+
+
+def round_lot_to_specs(
+    lot: float,
+    info: SymbolInfo,
+    *,
+    strict: bool = True,
+) -> float | None:
+    """Arredonda lote ao step do broker; None se inválido em modo strict."""
+    volume = _volume_from_lot(lot, info, strict=strict)
+    if volume is None:
+        return None
+    return protocol_volume_to_lots(volume, info.lot_size)
+
+
+def normalize_volume(lot: float, info: SymbolInfo, *, strict: bool = False) -> int | None:
+    """Converte lote para volume protocolo respeitando min/step/max do símbolo."""
+    return _volume_from_lot(lot, info, strict=strict)
+
+
+def compute_close_pnl(deal, default_money_digits: int) -> tuple[float, float, int] | None:
+    """Extrai PnL líquido, preço de fecho e timestamp de um deal de fecho."""
+    if not deal.HasField("closePositionDetail"):
+        return None
+    cpd = deal.closePositionDetail
+    digits = (
+        cpd.moneyDigits
+        if cpd.HasField("moneyDigits")
+        else (
+            deal.moneyDigits
+            if deal.HasField("moneyDigits")
+            else default_money_digits
+        )
+    )
+    scale = 10 ** digits
+    gross = cpd.grossProfit / scale
+    swap = cpd.swap / scale
+    comm = cpd.commission / scale
+    net = gross + swap + comm
+    close_price = cpd.entryPrice if cpd.HasField("entryPrice") else 0.0
+    if deal.HasField("executionPrice"):
+        close_price = deal.executionPrice
+    ts = deal.executionTimestamp if deal.HasField("executionTimestamp") else 0
+    if not ts and deal.HasField("utcLastUpdateTimestamp"):
+        ts = deal.utcLastUpdateTimestamp
+    return net, close_price, ts
+
+
+def lots_to_protocol_volume(lot: float, lot_size: int) -> int:
+    return int(round(lot * lot_size))
+
+
+def protocol_volume_to_lots(volume: int, lot_size: int) -> float:
+    return volume / lot_size
 
 
 def to_relative_price_delta(
@@ -133,6 +199,7 @@ class TradingCTraderClient(CTraderClient):
         self._trader_loaded = False
         self._pending_lock = threading.Lock()
         self._symbol_cache: dict[int, SymbolInfo] = {}
+        self._symbol_specs: dict[str, SymbolInfo] = {}
 
     def _set_pending(self, key: str, value) -> None:
         with self._pending_lock:
@@ -212,10 +279,67 @@ class TradingCTraderClient(CTraderClient):
             self._set_pending("symbol_by_id", res)
             return
 
+        if msg_type == ProtoOADealListByPositionIdRes().payloadType:
+            res = Protobuf.extract(message)
+            self._set_pending("deals_by_position", res)
+            return
+
         super()._on_message(client, message)
 
+    def _cache_symbol_info(self, name: str, info: SymbolInfo) -> None:
+        self._symbol_cache[info.symbol_id] = info
+        if name:
+            self._symbol_specs[name] = info
+
+    def preload_symbol_specs(self, symbols: list[str]) -> int:
+        """Carrega metadados completos para todos os símbolos do bot."""
+        ids: list[int] = []
+        id_to_name: dict[int, str] = {}
+        for name in symbols:
+            sym_id = self.get_symbol_id(name)
+            if sym_id is None:
+                log.warning("Símbolo não encontrado no broker: %s", name)
+                continue
+            ids.append(sym_id)
+            id_to_name[sym_id] = name
+
+        if not ids:
+            return 0
+
+        req = ProtoOASymbolByIdReq()
+        req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
+        for sym_id in ids:
+            req.symbolId.append(sym_id)
+        res = self.send_and_wait(req, "symbol_by_id", timeout=15)
+        if res is None or not res.symbol:
+            log.error("Falha ao pré-carregar specs de símbolos")
+            return 0
+
+        loaded = 0
+        for sym in res.symbol:
+            name = id_to_name.get(sym.symbolId, "")
+            info = SymbolInfo.from_proto(sym, name=name)
+            if info is None:
+                log.error("lotSize em falta para símbolo id=%s", sym.symbolId)
+                continue
+            self._cache_symbol_info(name, info)
+            loaded += 1
+            log.debug(
+                "%s: pipPos=%d lotSize=%d minVol=%.4f lot stepVol=%.4f lot",
+                name,
+                info.pip_position,
+                info.lot_size,
+                protocol_volume_to_lots(info.min_volume, info.lot_size),
+                protocol_volume_to_lots(info.step_volume, info.lot_size),
+            )
+        log.info("Specs carregados para %d/%d símbolos", loaded, len(symbols))
+        return loaded
+
     def get_symbol_info(self, symbol: str) -> SymbolInfo | None:
-        """Obtém metadados do símbolo (min/step volume, digits, SL mínimo)."""
+        """Obtém metadados do símbolo (min/step volume, digits, pipPosition)."""
+        if symbol in self._symbol_specs:
+            return self._symbol_specs[symbol]
+
         sym_id = self.get_symbol_id(symbol)
         if sym_id is None:
             return None
@@ -230,20 +354,20 @@ class TradingCTraderClient(CTraderClient):
             log.error("Sem metadados para símbolo %s (id=%s)", symbol, sym_id)
             return None
 
-        info = SymbolInfo.from_proto(res.symbol[0])
+        info = SymbolInfo.from_proto(res.symbol[0], name=symbol)
         if info is None:
             log.error("lotSize em falta para %s (id=%s)", symbol, sym_id)
             return None
-        self._symbol_cache[sym_id] = info
+        self._cache_symbol_info(symbol, info)
         log.debug(
-            "%s: digits=%d lotSize=%d minVol=%d (%.4f lot) stepVol=%d slDist=%d",
+            "%s: digits=%d pipPos=%d lotSize=%d minVol=%d (%.4f lot) stepVol=%d",
             symbol,
             info.digits,
+            info.pip_position,
             info.lot_size,
             info.min_volume,
             protocol_volume_to_lots(info.min_volume, info.lot_size),
             info.step_volume,
-            info.sl_distance,
         )
         return info
 
@@ -312,7 +436,7 @@ class CTraderBroker:
             return ""
 
         try:
-            volume = normalize_volume(lot, sym_info)
+            volume = normalize_volume(lot, sym_info, strict=True)
             if volume is None:
                 log.error(
                     "Volume inválido para %s: lot=%.2f min=%.4f step=%.4f",
@@ -446,8 +570,10 @@ class CTraderBroker:
                 entry = td.price if hasattr(td, "price") else 0.0
                 sym_info = self._client._symbol_cache.get(td.symbolId)
                 lot_size = sym_info.lot_size if sym_info else 1
+                symbol_name = sym_info.name if sym_info else ""
                 positions.append({
                     "ticket": str(pos.positionId),
+                    "symbol": symbol_name,
                     "symbol_id": td.symbolId,
                     "direction": direction,
                     "volume": td.volume / lot_size if lot_size else td.volume,
@@ -458,6 +584,20 @@ class CTraderBroker:
             return positions
         except Exception as e:
             log.error("Erro ao listar posições: %s", e)
+            return []
+
+    def get_deals_by_position(self, position_id: int) -> list:
+        """Obtém deals de uma posição (inclui fecho com PnL)."""
+        try:
+            req = ProtoOADealListByPositionIdReq()
+            req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
+            req.positionId = position_id
+            res = self._client.send_and_wait(req, "deals_by_position", timeout=10)
+            if res is None:
+                return []
+            return list(res.deal)
+        except Exception as e:
+            log.error("Erro ao obter deals da posição %s: %s", position_id, e)
             return []
 
     @staticmethod

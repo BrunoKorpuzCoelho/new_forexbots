@@ -1,69 +1,94 @@
-"""Cálculo de tamanho de lote baseado em risco percentual."""
+"""Cálculo de tamanho de lote baseado em risco percentual e specs do broker."""
 import logging
 
 from forexbot import config
+from forexbot.broker.ctrader_broker import SymbolInfo, round_lot_to_specs
 
 log = logging.getLogger(__name__)
 
-PIP_VALUE_PER_LOT: dict[str, float] = {
-    "XAUUSD": 10.0,
-    "XAGUSD": 50.0,
-    "XTIUSD": 10.0,
-    "BTCUSD": 1.0,
-    "ETHUSD": 1.0,
-    "SOLUSD": 1.0,
-    "XRPUSD": 1.0,
-    "default": 10.0,
-}
 
-MIN_LOT = 0.01
+def pip_size(info: SymbolInfo) -> float:
+    """Tamanho de 1 pip em unidades de preço."""
+    return 10 ** (-info.pip_position)
 
 
-def pip_multiplier(symbol: str) -> float:
-    """Converte diferença de preço em pips."""
-    if symbol.endswith("JPY"):
-        return 100.0
-    if symbol in ("XAUUSD", "XAGUSD"):
-        return 10.0
-    if symbol in ("BTCUSD", "ETHUSD"):
+def contract_units(info: SymbolInfo) -> float:
+    """Unidades do ativo base por 1 lote (lotSize cTrader em cents)."""
+    return info.lot_size / 100
+
+
+def quote_to_usd_rate(
+    symbol: str,
+    entry: float,
+    usdjpy_rate: float | None = None,
+) -> float:
+    """
+    Fator para converter valor em moeda de cotação para USD.
+    Pares USD* assumem cotação USD. Pares *JPY dividem pelo USDJPY.
+    """
+    if not symbol.endswith("JPY"):
         return 1.0
-    if symbol in ("XRPUSD", "SOLUSD"):
-        return 1000.0
-    if symbol == "XTIUSD":
-        return 100.0
-    return 10000.0
+    rate = usdjpy_rate if usdjpy_rate and usdjpy_rate > 0 else entry
+    if rate <= 0:
+        return 1.0
+    return 1.0 / rate
 
 
-def pip_value(symbol: str) -> float:
-    """Valor USD por pip por lote standard."""
-    return PIP_VALUE_PER_LOT.get(symbol, PIP_VALUE_PER_LOT["default"])
+def pip_value_per_lot_usd(
+    info: SymbolInfo,
+    entry: float,
+    usdjpy_rate: float | None = None,
+) -> float:
+    """Valor em USD de 1 pip para 1 lote."""
+    ps = pip_size(info)
+    pv_quote = ps * contract_units(info)
+    return pv_quote * quote_to_usd_rate(info.name, entry, usdjpy_rate)
 
 
-def lot_size(equity: float, entry: float, sl: float, symbol: str) -> float:
+def lot_size(
+    equity: float,
+    entry: float,
+    sl: float,
+    info: SymbolInfo,
+    usdjpy_rate: float | None = None,
+) -> float | None:
     """
     Calcula lote baseado em equity, RISK_PCT e distância ao SL.
-    Retorna MIN_LOT se SL demasiado pequeno.
+    Usa pipPosition/lotSize do broker. Retorna None se fora de min/max/step.
     """
     risk_amount = equity * (config.RISK_PCT / 100)
-    sl_pips = abs(entry - sl) * pip_multiplier(symbol)
+    sl_distance = abs(entry - sl)
+    ps = pip_size(info)
+    sl_pips = sl_distance / ps if ps > 0 else 0.0
 
     if sl_pips < 0.1:
         log.warning(
-            "SL demasiado pequeno (%.2f pips) para %s — a usar lote mínimo",
+            "SL demasiado pequeno (%.2f pips) para %s — ordem rejeitada",
             sl_pips,
-            symbol,
+            info.name,
         )
-        return MIN_LOT
+        return None
 
-    lot = risk_amount / (sl_pips * pip_value(symbol))
+    pv = pip_value_per_lot_usd(info, entry, usdjpy_rate)
+    if pv <= 0:
+        log.warning("pip_value inválido para %s", info.name)
+        return None
+
+    lot_raw = risk_amount / (sl_pips * pv)
     if config.MAX_LOT is not None:
-        lot = min(config.MAX_LOT, lot)
-    lot = round(max(MIN_LOT, lot), 2)
+        lot_raw = min(config.MAX_LOT, lot_raw)
+
+    lot_final = round_lot_to_specs(lot_raw, info, strict=True)
     log.debug(
-        "lot_size: equity=%.2f risk=%.2f sl_pips=%.1f lot=%.2f",
+        "lot_size: symbol=%s equity=%.2f risk_amount=%.2f sl_distance=%.6f "
+        "sl_pips=%.2f pip_value=%.4f lot_calculado=%.4f lot_final=%s",
+        info.name,
         equity,
         risk_amount,
+        sl_distance,
         sl_pips,
-        lot,
+        pv,
+        lot_raw,
+        f"{lot_final:.4f}" if lot_final is not None else "REJEITADO",
     )
-    return lot
+    return lot_final

@@ -23,21 +23,38 @@ from forexbot.strategies.strategy_c.strategy import StrategyC
 log = logging.getLogger(__name__)
 
 
-def _sync_dashboard() -> None:
-    """Importa logs JSONL para a base de dados do dashboard."""
+def _sync_dashboard(broker, notifier) -> None:
+    """Importa logs JSONL e sincroniza trades fechados com a BD."""
     try:
         import os
 
         import django
+        from django.apps import apps
 
         os.environ.setdefault("DJANGO_SETTINGS_MODULE", "dashboard_project.settings")
-        if not django.apps.apps.ready:
+        if not apps.ready:
             django.setup()
-        from django.core.management import call_command
 
-        call_command("import_logs", verbosity=0)
+        from forexbot.dashboard.sync import import_decision_logs, sync_closed_trades
+
+        import_decision_logs()
+        updated = sync_closed_trades(broker, notifier)
+        log.info("Sincronização DB: %d trades fechados atualizados", updated)
     except Exception:
         log.warning("Sync do dashboard falhou", exc_info=True)
+
+
+def _usdjpy_rate(client: TradingCTraderClient) -> float | None:
+    """Obtém taxa USDJPY para conversão de pares JPY."""
+    try:
+        bars = client.get_candles("USDJPY", "M15", count=1)
+        if not bars:
+            return None
+        bar = bars[-1]
+        low = bar.low / 100000
+        return low + bar.deltaClose / 100000
+    except Exception:
+        return None
 
 
 def bars_to_candles(bars: list) -> list[Candle]:
@@ -113,6 +130,12 @@ def connect_bot():
         )
 
     client.load_trader_info()
+    loaded = client.preload_symbol_specs(config.SYMBOLS)
+    if loaded < len(config.SYMBOLS):
+        notifier.send_warning(
+            "Símbolos",
+            f"Specs carregados para {loaded}/{len(config.SYMBOLS)} símbolos",
+        )
     broker = CTraderBroker(client)
     strategies = _load_strategies()
     log.info(
@@ -153,6 +176,8 @@ def run_cycle(
             level="WARNING",
         )
 
+    usdjpy = _usdjpy_rate(client)
+
     eval_n = 0
     for symbol in config.SYMBOLS:
         log.info("▸ Par %s", symbol)
@@ -184,22 +209,46 @@ def run_cycle(
 
                 if signal is not None:
                     stats["signals"] += 1
-                    lot = risk_manager.lot_size(
-                        equity, signal.entry, signal.sl, symbol
-                    )
-                    log.info(
-                        "%s SINAL %s lot=%.2f RR=1:%.1f",
-                        label,
-                        signal.direction.value,
-                        lot,
-                        signal.rr_ratio,
-                    )
-                    if lot <= 0:
-                        stats["no_signal"] += 1
+                    sym_info = client.get_symbol_info(symbol)
+                    if sym_info is None:
+                        notifier.send_warning(
+                            "Lot sizing",
+                            f"{symbol}: specs do símbolo indisponíveis",
+                        )
                         dl.log_no_signal(
                             strategy.name,
                             symbol,
-                            "lot_size=0 — SL inválido",
+                            "specs do símbolo indisponíveis",
+                            {},
+                        )
+                        stats["no_signal"] += 1
+                        continue
+
+                    jpy_rate = usdjpy if symbol.endswith("JPY") else None
+                    lot = risk_manager.lot_size(
+                        equity,
+                        signal.entry,
+                        signal.sl,
+                        sym_info,
+                        usdjpy_rate=jpy_rate,
+                    )
+                    log.info(
+                        "%s SINAL %s lot=%s RR=1:%.1f",
+                        label,
+                        signal.direction.value,
+                        f"{lot:.2f}" if lot is not None else "REJEITADO",
+                        signal.rr_ratio,
+                    )
+                    if lot is None or lot <= 0:
+                        stats["no_signal"] += 1
+                        notifier.send_warning(
+                            "Lot sizing",
+                            f"{symbol}: lote fora dos limites min/max/step",
+                        )
+                        dl.log_no_signal(
+                            strategy.name,
+                            symbol,
+                            "lot inválido — min/max/step",
                             {"lot": lot},
                         )
                         continue
@@ -235,7 +284,7 @@ def run_cycle(
                     traceback_str=tb,
                 )
 
-    _sync_dashboard()
+    _sync_dashboard(broker, notifier)
 
     elapsed = (datetime.now(timezone.utc) - cycle_start).total_seconds()
     log.info(
