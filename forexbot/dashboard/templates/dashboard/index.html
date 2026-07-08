@@ -64,7 +64,7 @@
     {% for s in by_symbol %}
     <tr>
       <td>{{ s.symbol }}</td>
-      <td>{{ s.count }}</td>
+      <td>{{ s.total }}</td>
       <td>{{ s.wins }}</td>
       <td class="{% if s.win_rate >= 50 %}positive{% else %}negative{% endif %}">{{ s.win_rate }}%</td>
       <td class="{% if s.pnl >= 0 %}positive{% else %}negative{% endif %}">${{ s.pnl }}</td>

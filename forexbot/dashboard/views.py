@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db.models import Avg, Count, Sum
+from django.db.models import Avg, Count, Q, Sum
+from django.db.models.functions import Coalesce
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import render
 from django.utils import timezone
@@ -64,18 +65,21 @@ def index(request: HttpRequest) -> HttpResponse:
         stats["strategy"] = strat
         by_strategy.append(stats)
 
-    by_symbol = []
-    symbols = (
-        Trade.objects.values("symbol")
-        .annotate(count=Count("id"))
-        .order_by("-count")[:10]
+    by_symbol = list(
+        Trade.objects.filter(closed_at__isnull=False)
+        .values("symbol")
+        .annotate(
+            total=Count("id", filter=Q(pnl__isnull=False)),
+            wins=Count("id", filter=Q(pnl__gt=0)),
+            losses=Count("id", filter=Q(pnl__lte=0, pnl__isnull=False)),
+            pnl=Coalesce(Sum("pnl"), 0.0),
+        )
+        .filter(total__gt=0)
+        .order_by("-total", "-pnl")[:10]
     )
-    for row in symbols:
-        sym = row["symbol"]
-        stats = _trade_stats(Trade.objects.filter(symbol=sym))
-        stats["symbol"] = sym
-        stats["count"] = row["count"]
-        by_symbol.append(stats)
+    for row in by_symbol:
+        row["win_rate"] = _win_rate(row["wins"], row["total"])
+        row["pnl"] = round(float(row["pnl"]), 2)
 
     context = {
         "total_trades": total_trades,
