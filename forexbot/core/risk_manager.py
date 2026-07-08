@@ -75,10 +75,19 @@ def lot_size(
         return None
 
     lot_raw = risk_amount / (sl_pips * pv)
+    lot_uncapped = lot_raw
     if config.MAX_LOT is not None:
         lot_raw = min(config.MAX_LOT, lot_raw)
 
     lot_final = round_lot_to_specs(lot_raw, info, strict=True)
+    if lot_uncapped > lot_raw and config.MAX_LOT is not None:
+        log.info(
+            "Lote limitado por MAX_LOT=%.2f: %s calculado=%.4f → %.4f",
+            config.MAX_LOT,
+            info.name,
+            lot_uncapped,
+            lot_raw,
+        )
     log.debug(
         "lot_size: symbol=%s equity=%.2f risk_amount=%.2f sl_distance=%.6f "
         "sl_pips=%.2f pip_value=%.4f lot_calculado=%.4f lot_final=%s",

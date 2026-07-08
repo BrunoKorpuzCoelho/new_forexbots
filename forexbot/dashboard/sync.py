@@ -27,6 +27,22 @@ def _infer_exit_reason(trade: Trade, close_price: float | None) -> str:
     return "broker_close"
 
 
+def _mark_legacy_closed(trade: Trade) -> None:
+    """Fecha trade antigo/inexistente no broker sem PnL (ex: mudança de conta)."""
+    now = dj_timezone.now()
+    Trade.objects.filter(pk=trade.pk).update(
+        closed_at=now,
+        exit_reason="legacy_account",
+        pnl=None,
+        pips=None,
+    )
+    log.info(
+        "Trade legado fechado na BD (sem PnL broker): ticket=%s %s",
+        trade.ticket,
+        trade.symbol,
+    )
+
+
 def sync_closed_trades(broker, notifier=None) -> int:
     """
     Marca trades fechados no broker como fechados na BD com PnL real.
@@ -40,6 +56,7 @@ def sync_closed_trades(broker, notifier=None) -> int:
     open_broker = {p["ticket"] for p in broker.get_open_positions()}
     db_open = Trade.objects.filter(closed_at__isnull=True)
     updated = 0
+    legacy = 0
 
     for trade in db_open:
         if trade.ticket in open_broker:
@@ -49,12 +66,15 @@ def sync_closed_trades(broker, notifier=None) -> int:
             position_id = int(trade.ticket)
         except ValueError:
             log.warning(
-                "Ticket não numérico (não é positionId): %s — ignorado",
+                "Ticket não numérico (não é positionId): %s — a marcar legado",
                 trade.ticket,
             )
+            _mark_legacy_closed(trade)
+            legacy += 1
             continue
 
-        deals = broker.get_deals_by_position(position_id)
+        from_ms = int(trade.opened_at.timestamp() * 1000)
+        deals = broker.get_deals_by_position(position_id, from_ts_ms=from_ms)
         close_deal = None
         for deal in reversed(deals):
             if deal.HasField("closePositionDetail"):
@@ -62,15 +82,14 @@ def sync_closed_trades(broker, notifier=None) -> int:
                 break
 
         if close_deal is None:
-            log.warning(
-                "Posição %s (%s) fechada no broker mas sem deal de fecho",
-                trade.ticket,
-                trade.symbol,
-            )
+            _mark_legacy_closed(trade)
+            legacy += 1
             continue
 
         pnl_data = compute_close_pnl(close_deal, broker._client._money_digits)
         if pnl_data is None:
+            _mark_legacy_closed(trade)
+            legacy += 1
             continue
 
         net_pnl, close_price, closed_ts_ms = pnl_data
@@ -115,10 +134,16 @@ def sync_closed_trades(broker, notifier=None) -> int:
             exit_reason,
         )
 
+    if updated or legacy:
+        log.info(
+            "Sincronização DB: %d trades fechados com PnL, %d legados arquivados",
+            updated,
+            legacy,
+        )
     if updated and notifier:
         notifier.send_warning(
             "Sync DB",
-            f"{updated} trade(s) fechado(s) sincronizado(s) com o broker",
+            f"{updated} trade(s) fechado(s), {legacy} legado(s) arquivado(s)",
         )
 
     return updated

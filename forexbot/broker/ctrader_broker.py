@@ -281,7 +281,9 @@ class TradingCTraderClient(CTraderClient):
 
         if msg_type == ProtoOADealListByPositionIdRes().payloadType:
             res = Protobuf.extract(message)
-            self._set_pending("deals_by_position", res)
+            pos_id = res.deal[0].positionId if res.deal else None
+            key = f"deals_pos_{pos_id}" if pos_id else "deals_by_position"
+            self._set_pending(key, res)
             return
 
         super()._on_message(client, message)
@@ -586,13 +588,22 @@ class CTraderBroker:
             log.error("Erro ao listar posições: %s", e)
             return []
 
-    def get_deals_by_position(self, position_id: int) -> list:
+    def get_deals_by_position(
+        self,
+        position_id: int,
+        from_ts_ms: int | None = None,
+        to_ts_ms: int | None = None,
+    ) -> list:
         """Obtém deals de uma posição (inclui fecho com PnL)."""
         try:
+            now_ms = int(time.time() * 1000)
             req = ProtoOADealListByPositionIdReq()
             req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
             req.positionId = position_id
-            res = self._client.send_and_wait(req, "deals_by_position", timeout=10)
+            req.fromTimestamp = from_ts_ms if from_ts_ms is not None else 0
+            req.toTimestamp = to_ts_ms if to_ts_ms is not None else now_ms
+            pending_key = f"deals_pos_{position_id}"
+            res = self._client.send_and_wait(req, pending_key, timeout=10)
             if res is None:
                 return []
             return list(res.deal)

@@ -25,8 +25,8 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # ── Risco ────────────────────────────────────────────────
 RISK_PCT = float(os.getenv("RISK_PCT", "1.0"))
-# 0 ou vazio = sem limite de lote máximo
-_max_lot = os.getenv("MAX_LOT", "0").strip()
+# 0 ou vazio = sem limite; default 1.0 = máximo 1 lote por ordem
+_max_lot = os.getenv("MAX_LOT", "1.0").strip()
 MAX_LOT = float(_max_lot) if _max_lot and float(_max_lot) > 0 else None
 
 # ── Django ───────────────────────────────────────────────
