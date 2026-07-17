@@ -3,12 +3,18 @@ Estratégia B — Bollinger Bands + RSI (Mean Reversion).
 
 LONG:  close <= BB lower(20,2) + RSI(14) < 35
 SHORT: close >= BB upper(20,2) + RSI(14) > 65
+
+SL = 1×ATR a partir da entrada.
+TP = mesma distância do SL (risco/recompensa 1:1).
+
+STRATEGY_B_INVERT=true inverte a direção (LONG↔SHORT) sem mudar as condições.
 """
 import logging
 
 import pandas as pd
 import pandas_ta as ta
 
+from forexbot import config
 from forexbot.core import decision_logger as dl
 from forexbot.core.candle import Candle
 from forexbot.core.signal import Direction, TradeSignal
@@ -29,6 +35,13 @@ def _bb_column_names(bb: pd.DataFrame) -> tuple[str, str, str] | None:
         return lower, middle, upper
     except StopIteration:
         return None
+
+
+def _sl_tp_1_to_1(entry: float, direction: Direction, risk: float) -> tuple[float, float]:
+    """SL e TP à mesma distância (1:1), com risco baseado no ATR."""
+    if direction == Direction.LONG:
+        return entry - risk, entry + risk
+    return entry + risk, entry - risk
 
 
 class StrategyB(BaseStrategy):
@@ -80,36 +93,40 @@ class StrategyB(BaseStrategy):
             "bb_up": round(upper, 5),
             "rsi": round(rsi_v, 2),
             "atr": round(atr_v, 5),
+            "rr": "1:1",
+            "invert": config.STRATEGY_B_INVERT,
         }
 
+        direction: Direction | None = None
+        reason = ""
+
         if close <= lower and rsi_v < RSI_OVERSOLD:
-            entry = last_candle.close
-            sl = entry - atr_v
-            tp = middle
+            direction = Direction.LONG
             reason = f"Preço ({close:.5f}) ≤ BB lower ({lower:.5f}) · RSI={rsi_v:.1f}"
-            signal = TradeSignal(
-                "B", symbol, Direction.LONG, entry, sl, tp, reason, last_candle.timestamp
-            )
-            dl.log_signal(signal, indicators)
-            return signal
-
-        if close >= upper and rsi_v > RSI_OVERBOUGHT:
-            entry = last_candle.close
-            sl = entry + atr_v
-            tp = middle
+        elif close >= upper and rsi_v > RSI_OVERBOUGHT:
+            direction = Direction.SHORT
             reason = f"Preço ({close:.5f}) ≥ BB upper ({upper:.5f}) · RSI={rsi_v:.1f}"
-            signal = TradeSignal(
-                "B", symbol, Direction.SHORT, entry, sl, tp, reason, last_candle.timestamp
+
+        if direction is None:
+            if close <= lower:
+                reason = f"Preço na BB lower mas RSI={rsi_v:.1f} ≥ {RSI_OVERSOLD} (sem confirmação)"
+            elif close >= upper:
+                reason = f"Preço na BB upper mas RSI={rsi_v:.1f} ≤ {RSI_OVERBOUGHT} (sem confirmação)"
+            else:
+                reason = f"Preço ({close:.5f}) dentro das bandas [{lower:.5f}, {upper:.5f}]"
+            dl.log_no_signal("B", symbol, reason, indicators)
+            return None
+
+        if config.STRATEGY_B_INVERT:
+            direction = (
+                Direction.SHORT if direction == Direction.LONG else Direction.LONG
             )
-            dl.log_signal(signal, indicators)
-            return signal
+            reason = f"[INVERT] {reason}"
 
-        if close <= lower:
-            reason = f"Preço na BB lower mas RSI={rsi_v:.1f} ≥ {RSI_OVERSOLD} (sem confirmação)"
-        elif close >= upper:
-            reason = f"Preço na BB upper mas RSI={rsi_v:.1f} ≤ {RSI_OVERBOUGHT} (sem confirmação)"
-        else:
-            reason = f"Preço ({close:.5f}) dentro das bandas [{lower:.5f}, {upper:.5f}]"
-
-        dl.log_no_signal("B", symbol, reason, indicators)
-        return None
+        entry = last_candle.close
+        sl, tp = _sl_tp_1_to_1(entry, direction, atr_v)
+        signal = TradeSignal(
+            "B", symbol, direction, entry, sl, tp, reason, last_candle.timestamp
+        )
+        dl.log_signal(signal, indicators)
+        return signal

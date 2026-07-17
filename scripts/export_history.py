@@ -122,7 +122,9 @@ def print_live() -> None:
                     f"ticket={p.get('ticket')}"
                 )
     finally:
-        client.stop()
+        stop = getattr(client, "stop", None)
+        if callable(stop):
+            stop()
 
 
 def main() -> None:

@@ -38,6 +38,8 @@ DJANGO_PORT       = int(os.getenv("DJANGO_PORT", "9999"))
 STRATEGY_A_ENABLED = os.getenv("STRATEGY_A_ENABLED", "true").lower() == "true"
 STRATEGY_B_ENABLED = os.getenv("STRATEGY_B_ENABLED", "true").lower() == "true"
 STRATEGY_C_ENABLED = os.getenv("STRATEGY_C_ENABLED", "true").lower() == "true"
+# Inverte LONG↔SHORT na Estratégia B (mesmas condições de entrada)
+STRATEGY_B_INVERT = os.getenv("STRATEGY_B_INVERT", "false").lower() == "true"
 
 # ── Pares ────────────────────────────────────────────────
 SYMBOLS = [s.strip() for s in os.getenv("SYMBOLS", "EURUSD,XAUUSD").split(",")]
