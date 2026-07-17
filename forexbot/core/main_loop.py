@@ -15,6 +15,7 @@ from forexbot.broker.ctrader_broker import CTraderBroker, TradingCTraderClient
 from forexbot.core import decision_logger as dl
 from forexbot.core import risk_manager
 from forexbot.core.candle import Candle
+from forexbot.core.trade_manager import manage_trailing_stops
 from forexbot.notifications.telegram import get_notifier
 from forexbot.strategies.strategy_a.strategy import StrategyA
 from forexbot.strategies.strategy_b.strategy import StrategyB
@@ -285,6 +286,12 @@ def run_cycle(
                 )
 
     _sync_dashboard(broker, notifier)
+    try:
+        trailed = manage_trailing_stops(broker, client, notifier)
+        if trailed:
+            log.info("Trail SL: %d posição(ões) atualizada(s)", trailed)
+    except Exception:
+        log.warning("Trail SL falhou no ciclo", exc_info=True)
 
     elapsed = (datetime.now(timezone.utc) - cycle_start).total_seconds()
     log.info(
@@ -318,13 +325,26 @@ def run() -> None:
 
     while True:
         target = next_m15_close()
-        wait = (target - datetime.now(timezone.utc)).total_seconds()
-        if wait > 0:
+        while True:
+            now = datetime.now(timezone.utc)
+            wait = (target - now).total_seconds()
+            if wait <= 0:
+                break
+            # Entre velas: verificar trailing SL periodicamente
+            chunk = min(wait, float(config.TRAIL_CHECK_SECONDS))
             log.info(
-                "À espera do próximo M15 — %ds até %s UTC",
+                "À espera do próximo M15 — %ds até %s UTC (trail check em %ds)",
                 int(wait),
                 target.strftime("%Y-%m-%d %H:%M"),
+                int(chunk),
             )
-            time.sleep(wait)
+            time.sleep(chunk)
+            if config.TRAIL_SL_ENABLED and wait > config.TRAIL_CHECK_SECONDS:
+                try:
+                    trailed = manage_trailing_stops(broker, client, notifier)
+                    if trailed:
+                        log.info("Trail SL: %d posição(ões) atualizada(s)", trailed)
+                except Exception:
+                    log.warning("Trail SL falhou entre ciclos", exc_info=True)
 
         run_cycle(client, broker, strategies, notifier)

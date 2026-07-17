@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from ctrader_open_api import Protobuf
 from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+    ProtoOAAmendPositionSLTPReq,
     ProtoOAClosePositionReq,
     ProtoOADealListByPositionIdReq,
     ProtoOADealListByPositionIdRes,
@@ -554,6 +555,65 @@ class CTraderBroker:
             log.error("Erro ao fechar posição %s: %s", ticket, e)
             return False
 
+    def amend_position_sltp(
+        self,
+        ticket: str,
+        symbol: str,
+        stop_loss: float,
+        take_profit: float | None = None,
+    ) -> bool:
+        """Altera SL/TP absolutos de uma posição aberta."""
+        if config.DRY_RUN:
+            log.info(
+                "[DRY_RUN] Amend SL/TP %s ticket=%s sl=%.5f tp=%s",
+                symbol,
+                ticket,
+                stop_loss,
+                f"{take_profit:.5f}" if take_profit is not None else "—",
+            )
+            return True
+
+        try:
+            req = ProtoOAAmendPositionSLTPReq()
+            req.ctidTraderAccountId = config.CTRADER_ACCOUNT_ID
+            req.positionId = int(ticket)
+            req.stopLoss = float(stop_loss)
+            if take_profit is not None and take_profit > 0:
+                req.takeProfit = float(take_profit)
+            if self._client._is_limited_risk:
+                req.guaranteedStopLoss = True
+
+            self._client._set_pending("exec_pending", None)
+            self._client._set_pending("order_error", None)
+            self._client.fire_request(req)
+
+            exec_event = self._client.wait_pending("exec_pending", timeout=20)
+            if exec_event is None:
+                log.error("Timeout ao alterar SL/TP %s ticket=%s", symbol, ticket)
+                return False
+
+            if isinstance(exec_event, ProtoOAOrderErrorEvent):
+                log.error(
+                    "Amend SL/TP rejeitado [%s %s]: %s — %s",
+                    symbol,
+                    ticket,
+                    exec_event.errorCode,
+                    exec_event.description if exec_event.HasField("description") else "",
+                )
+                return False
+
+            log.info(
+                "SL/TP alterado: %s ticket=%s sl=%.5f tp=%s",
+                symbol,
+                ticket,
+                stop_loss,
+                f"{take_profit:.5f}" if take_profit is not None else "—",
+            )
+            return True
+        except Exception as e:
+            log.error("Erro ao alterar SL/TP %s ticket=%s: %s", symbol, ticket, e)
+            return False
+
     def get_open_positions(self) -> list[dict]:
         """Lista posições abertas via reconcile."""
         try:
@@ -569,7 +629,9 @@ class CTraderBroker:
                     continue
                 td = pos.tradeData
                 direction = "LONG" if td.tradeSide == ProtoOATradeSide.BUY else "SHORT"
-                entry = td.price if hasattr(td, "price") else 0.0
+                entry = pos.price if pos.HasField("price") else 0.0
+                if not entry and hasattr(td, "price"):
+                    entry = td.price
                 sym_info = self._client._symbol_cache.get(td.symbolId)
                 lot_size = sym_info.lot_size if sym_info else 1
                 symbol_name = sym_info.name if sym_info else ""

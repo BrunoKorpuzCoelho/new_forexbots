@@ -41,6 +41,11 @@ STRATEGY_C_ENABLED = os.getenv("STRATEGY_C_ENABLED", "true").lower() == "true"
 # Inverte LONG↔SHORT na Estratégia B (mesmas condições de entrada)
 STRATEGY_B_INVERT = os.getenv("STRATEGY_B_INVERT", "false").lower() == "true"
 
+# ── Trailing SL ──────────────────────────────────────────
+# A 50% do TP → move SL para 10% do TP; a 70% → SL para 40% do TP
+TRAIL_SL_ENABLED = os.getenv("TRAIL_SL_ENABLED", "true").lower() == "true"
+TRAIL_CHECK_SECONDS = int(os.getenv("TRAIL_CHECK_SECONDS", "60"))
+
 # ── Pares ────────────────────────────────────────────────
 SYMBOLS = [s.strip() for s in os.getenv("SYMBOLS", "EURUSD,XAUUSD").split(",")]
 
